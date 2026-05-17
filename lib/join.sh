@@ -19,7 +19,7 @@ fi
 
 # Banlist gate: refuse to join if our session has been kicked.
 if buses::is_banned "$bus"; then
-  buses::die "you have been kicked from bus '$bus' — ask the manager to /buses:unkick you"
+  buses::die "you have been kicked from bus '$bus' — ask the driver to /buses:unkick you"
 fi
 
 # Warn (but do not block) if the bus is locked. You can still receive.

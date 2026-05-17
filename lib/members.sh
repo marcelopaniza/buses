@@ -11,7 +11,7 @@ bus="${1:-}"
 [ -n "$bus" ] || buses::die "usage: members.sh <bus>"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
 
-mgr=$(buses::manifest_get "$bus" '.manager')
+drv=$(buses::driver_uuid "$bus")
 mf=$(buses::manifest_file "$bus")
 banned=()
 if [ -f "$mf" ]; then
@@ -33,8 +33,8 @@ else
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     jq -r '"\(.id) \t\(.name // "-") \t\(.host // "-") \t\(.last_seen // "-")"' "$f" 2>/dev/null \
-      | awk -F'\t' -v mgr="$mgr" '{
-        role = (mgr != "" && $1 == mgr " ") ? "manager" : "member"
+      | awk -F'\t' -v drv="$drv" '{
+        role = (drv != "" && $1 == drv " ") ? "driver" : "rider"
         printf "%-38s %-20s %-20s %-22s %s\n", $1, $2, $3, $4, role
       }'
   done < <(find "$mdir" -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort)

@@ -73,25 +73,32 @@ The shared path can differ per machine — on Mac it might be `~/Library/CloudSt
 |---|---|
 | `/buses:init <path>` | Set the shared folder for this machine, generate a session UUID. |
 | `/buses:name <name>` | Set a friendly name (other sessions address you by this or your UUID). |
-| `/buses:create <bus>` | Create a new bus on the shared folder. The creator becomes manager. |
+| `/buses:create <bus>` | Create a new bus on the shared folder. The creator becomes driver. |
 | `/buses:join <bus>` | Subscribe this session to a bus (auto-creates if missing). |
 | `/buses:leave <bus>` | Unsubscribe and remove presence. |
-| `/buses:send <bus> <to> <msg>` | Send to a member name, UUID, or `all`. |
+| `/buses:send <bus> <to> <msg>` | Send to a rider name, UUID, `all`, or a comma-list (`loop,felix`). Body can also `@-mention` riders to grab their attention. |
+| `/buses:start` | First-time guided setup (asks the right questions and calls the right commands). |
 | `/buses:read` | Manually fetch new messages and advance the cursor. (You don't normally need this — the hook does it.) |
 | `/buses:status` | This session's config, subscriptions, and unread counts. |
 | `/buses:list` | All buses on the shared folder. |
-| `/buses:members <bus>` | Members of a bus, with manager + banned annotations. |
+| `/buses:members <bus>` (or `/buses:riders`) | Riders of a bus, with driver + banned annotations. |
 
-### Manager (creator of a bus only)
+### Driver (creator of a bus, transferable)
+
+Every bus has one **driver** (admin). Everyone else is a **rider**.
 
 | Command | What it does |
 |---|---|
-| `/buses:lock <bus> [reason]` | Block all sends except from the manager. Members can still read. |
+| `/buses:lock <bus> [reason]` | Block all sends except from the driver. Riders can still read. |
 | `/buses:unlock <bus>` | Lift the lock. |
 | `/buses:kick <bus> <name-or-uuid> [reason]` | Add to banlist, remove member record, drop a kick-notice for the target. |
 | `/buses:unkick <bus> <name-or-uuid>` | Lift a ban. |
+| `/buses:transfer-driver <bus> <name-or-uuid> [--force]` | Hand the wheel to another rider. `--force` lets any rider take over a bus whose driver is gone. |
+| `/buses:cleanup-stale <bus> [--older-than 30d] [--dry-run] [--force]` | Remove member records that haven't checked in recently. Driver record is preserved unless `--force`. |
 
-**Manager privileges are cooperative, not enforced.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the shared folder can bypass. Treat lock/kick as protocol, not security.
+**Driver privileges are cooperative, not enforced.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the shared folder can bypass. Treat lock/kick as protocol, not security.
+
+> **Naming history**: older manifests stored the driver under `manager`. The plugin reads either field and writes `driver`, so old buses migrate automatically the first time anyone runs a driver action on them.
 
 ### Watcher (optional desktop notifications)
 

@@ -185,11 +185,15 @@ buses::valid_name() {
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
 }
 
-# ── manifest / manager / lock / ban ─────────────────────────────────────────
+# ── manifest / driver / lock / ban ──────────────────────────────────────────
+# The "driver" of a bus is its admin. Older manifests stored this under
+# `manager`; new code reads both (driver wins, manager is the fallback) and
+# new writes use `driver` (and drop the legacy `manager` key) so manifests
+# migrate naturally on any driver-action without an explicit step.
 buses::manifest_file() { printf '%s/manifest.json' "$(buses::bus_dir "$1")"; }
 
 buses::manifest_get() {
-  # $1 = bus, $2 = jq filter (e.g. '.manager')
+  # $1 = bus, $2 = jq filter (e.g. '.driver')
   local mf; mf=$(buses::manifest_file "$1")
   [ -f "$mf" ] || { printf ''; return 0; }
   jq -r "${2} // \"\"" "$mf" 2>/dev/null || printf ''
@@ -197,20 +201,37 @@ buses::manifest_get() {
 
 buses::manifest_set() {
   # $1 = bus, $2 = jq expression, remaining args passed to jq.
+  # Every write also migrates any legacy `manager` field to `driver`, so a
+  # bus created on an old version of the plugin gets normalised the first
+  # time anyone modifies its manifest.
   local bus="$1"; shift
   local expr="$1"; shift
   local mf; mf=$(buses::manifest_file "$bus")
   [ -f "$mf" ] || buses::die "bus '$bus' has no manifest"
   local tmp="${mf}.tmp.$$"
-  jq "$@" "$expr" "$mf" > "$tmp" && mv "$tmp" "$mf"
+  jq "$@" "(.driver = (.driver // .manager)) | del(.manager) | (${expr})" \
+    "$mf" > "$tmp" && mv "$tmp" "$mf"
 }
 
-buses::is_manager() {
-  # $1 = bus. Returns 0 if our session is the bus manager.
-  local sid mgr
+buses::driver_uuid() {
+  # Resolve the bus driver's UUID, reading `.driver` first and falling back
+  # to the legacy `.manager` field. Echoes empty if neither is set.
+  local mf; mf=$(buses::manifest_file "$1")
+  [ -f "$mf" ] || { printf ''; return 0; }
+  jq -r '(.driver // .manager // "")' "$mf" 2>/dev/null
+}
+
+buses::is_driver() {
+  # $1 = bus. Returns 0 if our session is the bus driver.
+  local sid drv
   sid=$(buses::config_get '.session_id')
-  mgr=$(buses::manifest_get "$1" '.manager')
-  [ -n "$mgr" ] && [ "$mgr" = "$sid" ]
+  drv=$(buses::driver_uuid "$1")
+  [ -n "$drv" ] && [ "$drv" = "$sid" ]
+}
+
+buses::set_driver() {
+  # $1 = bus, $2 = new driver UUID. Writes `.driver` and drops legacy `.manager`.
+  buses::manifest_set "$1" '.driver = $d | del(.manager)' --arg d "$2"
 }
 
 buses::is_locked() {

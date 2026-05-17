@@ -12,7 +12,7 @@ bus="${1:-}"
 who="${2:-}"
 [ -n "$bus" ] && [ -n "$who" ] || buses::die "usage: unkick.sh <bus> <name-or-uuid>"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
-buses::is_manager "$bus" || buses::die "only the manager of '$bus' can unkick"
+buses::is_driver "$bus"  || buses::die "only the driver of '$bus' can unkick"
 
 # Try member resolution first (in case they rejoined under a new record);
 # otherwise treat input as a raw UUID.

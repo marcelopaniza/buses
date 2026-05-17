@@ -12,7 +12,7 @@ reason="$*"
 
 [ -n "$bus" ] || buses::die "usage: lock.sh <bus> [reason...]"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
-buses::is_manager "$bus" || buses::die "only the manager of '$bus' can lock it"
+buses::is_driver "$bus"  || buses::die "only the driver of '$bus' can lock it"
 
 sid=$(buses::config_get '.session_id')
 buses::manifest_set "$bus" \

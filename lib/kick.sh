@@ -14,13 +14,13 @@ reason="$*"
 
 [ -n "$bus" ] && [ -n "$who" ] || buses::die "usage: kick.sh <bus> <name-or-uuid> [reason...]"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
-buses::is_manager "$bus" || buses::die "only the manager of '$bus' can kick"
+buses::is_driver "$bus"  || buses::die "only the driver of '$bus' can kick"
 
 target=$(buses::resolve_member "$bus" "$who")
 [ -n "$target" ] || buses::die "no member named '$who' (or matching UUID) in bus '$bus'"
 
-mgr=$(buses::manifest_get "$bus" '.manager')
-[ "$target" != "$mgr" ] || buses::die "refusing to kick the manager — transfer management first"
+drv=$(buses::driver_uuid "$bus")
+[ "$target" != "$drv" ] || buses::die "refusing to kick the driver — /buses:transfer-driver first"
 
 if buses::is_banned "$bus" "$target"; then
   printf 'buses: %s is already banned from "%s"\n' "$target" "$bus"

@@ -19,7 +19,7 @@ if [ ! -d "$dir" ]; then
     --arg n "$bus" \
     --arg c "$(buses::now_iso)" \
     --arg by "$(buses::config_get '.session_id')" \
-    '{name: $n, created: $c, created_by: $by, manager: $by}' > "$dir/manifest.json"
+    '{name: $n, created: $c, created_by: $by, driver: $by}' > "$dir/manifest.json"
   created=yes
 fi
 

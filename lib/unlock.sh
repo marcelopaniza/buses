@@ -9,7 +9,7 @@ buses::config_require
 bus="${1:-}"
 [ -n "$bus" ] || buses::die "usage: unlock.sh <bus>"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
-buses::is_manager "$bus" || buses::die "only the manager of '$bus' can unlock it"
+buses::is_driver "$bus"  || buses::die "only the driver of '$bus' can unlock it"
 
 if ! buses::is_locked "$bus"; then
   printf 'buses: bus "%s" was not locked\n' "$bus"
