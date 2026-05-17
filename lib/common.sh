@@ -4,8 +4,57 @@
 
 set -u
 
-BUSES_CONFIG_DIR="${BUSES_CONFIG_DIR:-$HOME/.config/buses}"
+# ── config dir resolution ───────────────────────────────────────────────────
+# Identity is PER-TERMINAL so multiple Claude Code terminals on one machine
+# never share a config. Precedence:
+#   1. $BUSES_CONFIG_DIR if explicitly set    (manual override; highest)
+#   2. <xdg-config>/buses/sessions/$CLAUDE_CODE_SESSION_ID   (per-terminal)
+#   3. <xdg-config>/buses/projects/<flat-PWD>                (manual/scripted)
+#
+# Every Claude Code terminal has a distinct CLAUDE_CODE_SESSION_ID, so each
+# one resolves to its own config dir, its own UUID, its own /buses:name. The
+# id persists across resumes of the same conversation, so closing and
+# reopening Claude Code keeps the same identity.
+buses::_flatten_path() {
+  local p="$1"
+  case "$p" in
+    /*) ;;
+    *)  p="$(cd "$p" 2>/dev/null && pwd 2>/dev/null)" || p="$HOME" ;;
+  esac
+  [ -n "$p" ] || p="$HOME"
+  printf '%s' "$p" | sed 's,/,-,g'
+}
+
+buses::project_dir() {
+  local p="${CLAUDE_PROJECT_DIR:-$PWD}"
+  [ -n "$p" ] || p="$HOME"
+  printf '%s' "$p"
+}
+
+buses::terminal_id() {
+  printf '%s' "${CLAUDE_CODE_SESSION_ID:-}"
+}
+
+buses::_resolve_config_dir() {
+  if [ -n "${BUSES_CONFIG_DIR:-}" ]; then
+    printf '%s' "$BUSES_CONFIG_DIR"
+    return 0
+  fi
+  local base="${XDG_CONFIG_HOME:-$HOME/.config}/buses"
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    printf '%s/sessions/%s' "$base" "$CLAUDE_CODE_SESSION_ID"
+    return 0
+  fi
+  # No Claude Code env (manual/scripted use): fall back to per-project key.
+  local key; key=$(buses::_flatten_path "$(buses::project_dir)")
+  printf '%s/projects/%s' "$base" "$key"
+}
+
+# Remember whether the user explicitly set the path, for the legacy hint.
+BUSES_CONFIG_DIR_EXPLICIT="${BUSES_CONFIG_DIR:-}"
+BUSES_CONFIG_DIR="$(buses::_resolve_config_dir)"
 BUSES_CONFIG_FILE="$BUSES_CONFIG_DIR/config.json"
+BUSES_LEGACY_CONFIG_FILE="$HOME/.config/buses/config.json"
 
 # ── output ──────────────────────────────────────────────────────────────────
 buses::err() { printf 'buses: %s\n' "$*" >&2; }
@@ -39,7 +88,26 @@ buses::now_compact() { date -u +'%Y%m%dT%H%M%SZ'; }
 buses::config_exists() { [ -f "$BUSES_CONFIG_FILE" ]; }
 
 buses::config_require() {
-  buses::config_exists || buses::die "not initialised — run /buses:init <shared-path> first"
+  if buses::config_exists; then return 0; fi
+  # Helpful hint when a legacy single-config exists but isn't being used.
+  if [ -z "$BUSES_CONFIG_DIR_EXPLICIT" ] \
+     && [ -f "$BUSES_LEGACY_CONFIG_FILE" ] \
+     && [ "$BUSES_CONFIG_FILE" != "$BUSES_LEGACY_CONFIG_FILE" ]; then
+    buses::err "no config for this terminal session yet."
+    buses::err "  terminal session: ${CLAUDE_CODE_SESSION_ID:-<not set — running outside Claude Code?>}"
+    buses::err "  expected config:  $BUSES_CONFIG_FILE"
+    buses::err ""
+    buses::err "  found legacy single-config at: $BUSES_LEGACY_CONFIG_FILE"
+    buses::err "    (in the old layout all terminals shared one identity — that's the bug)"
+    buses::err ""
+    buses::err "  pick one:"
+    buses::err "    /buses:init <shared-path>"
+    buses::err "       → fresh per-terminal identity here (recommended — /buses:name only affects this terminal)"
+    buses::err "    BUSES_CONFIG_DIR=$HOME/.config/buses <cmd>"
+    buses::err "       → keep using the legacy shared identity"
+    exit 1
+  fi
+  buses::die "not initialised — run /buses:init <shared-path> first"
 }
 
 buses::config_get() {
@@ -64,12 +132,14 @@ buses::config_init_file() {
   jq -n \
     --arg sp "$shared_path" \
     --arg sid "$sid" \
+    --arg cc_sid "${CLAUDE_CODE_SESSION_ID:-}" \
     --arg created "$(buses::now_iso)" \
     '{
       version: 1,
       shared_path: $sp,
       session_id: $sid,
       session_name: "",
+      claude_code_session_id: $cc_sid,
       buses: [],
       created: $created
     }' > "$BUSES_CONFIG_FILE"

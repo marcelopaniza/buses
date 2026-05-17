@@ -130,11 +130,55 @@ Filenames are `<UTC-compact-timestamp>__<short-id>.msg` — sortable, unique, an
 
 ## Identity model
 
-- One **session UUID** per `/buses:init` invocation, stored in `~/.config/buses/config.json` (overridable via `$BUSES_CONFIG_DIR`).
-- One **friendly name** per session, optional, can be anything matching `[A-Za-z0-9._-]{1,64}`.
-- One config file per Claude Code session — so on a single machine you can have many sessions with distinct identities. Each session lives in its own `$BUSES_CONFIG_DIR`. (For a default install they all share `~/.config/buses`, meaning all terminals on that host share one identity. Override `$BUSES_CONFIG_DIR` if you want per-terminal identity.)
+**Per Claude Code terminal, automatic.** Every Claude Code session has a unique `CLAUDE_CODE_SESSION_ID` in its environment, and the plugin keys its config off it:
 
-Names are *not* globally unique. If two sessions share a name, `/buses:send general alice ...` will land in **every** message file but only the one whose UUID matches will pick it up (the receive filter is `to == sid || to == name || to == "all"`). For unambiguous delivery, use the UUID.
+```
+~/.config/buses/sessions/<CLAUDE_CODE_SESSION_ID>/config.json
+```
+
+This means:
+
+- Open two terminals on the same machine → two distinct UUIDs, two distinct `/buses:name`s, two independent inboxes.
+- Resume a conversation later → same `CLAUDE_CODE_SESSION_ID`, same identity, same buses.
+- Two terminals in the same project → still distinct (each terminal is its own session).
+
+**Resolution precedence:**
+
+1. `$BUSES_CONFIG_DIR` if explicitly set — manual override, highest priority.
+2. `~/.config/buses/sessions/<CLAUDE_CODE_SESSION_ID>/` — per-terminal, automatic.
+3. `~/.config/buses/projects/<flat-PWD>/` — fallback when running scripts outside Claude Code.
+
+**Overrides** you might want:
+
+- Want two terminals to share one identity (e.g. a long-running "worker" identity bound to a project)?
+  ```
+  export BUSES_CONFIG_DIR=~/.config/buses/projects/my-worker
+  ```
+  Set this before launching Claude Code, in both terminals.
+- Want one terminal to use someone else's pre-shared config? Same mechanism.
+
+**Names are not globally unique.** If two sessions share a name, `/buses:send general alice ...` will land in **every** message file but only the one whose UUID matches will pick it up (the receive filter is `to == sid || to == name || to == "all"`). For unambiguous delivery, use the UUID.
+
+### Migrating from earlier versions
+
+Earlier versions used a single config at `~/.config/buses/config.json` — meaning every terminal on the machine shared one identity (when you `/buses:name foo` in one terminal, every terminal became `foo`). If you have that legacy file, `/buses:status` will detect it and print a hint. To migrate:
+
+```
+# in each terminal, once:
+/buses:init <your-shared-path>
+/buses:name <a-name-you-pick-for-this-terminal>
+/buses:join <bus>
+# optional cleanup, only after all terminals migrated:
+rm ~/.config/buses/config.json
+```
+
+Or, to *keep* the old "single identity" behavior (not recommended but supported):
+
+```
+export BUSES_CONFIG_DIR=~/.config/buses
+```
+
+in every terminal's shell init, before launching Claude Code.
 
 ## Why no `/loop`?
 

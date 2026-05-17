@@ -36,11 +36,18 @@ mkdir -p "$shared/buses" || buses::die "cannot create $shared/buses (check the p
 
 sid=$(buses::config_init_file "$shared")
 
+cc_sid=$(buses::terminal_id)
 cat <<EOF
 buses: initialised
+  terminal:    ${cc_sid:-<not set — running outside Claude Code?>}
+  project:     $(buses::project_dir)
   config:      $BUSES_CONFIG_FILE
   shared_path: $shared
   session_id:  $sid
+
+  (identity is scoped to THIS terminal — other Claude Code terminals on this
+   machine get their own UUIDs, even in the same project. Override with
+   BUSES_CONFIG_DIR if you want to share identity across terminals.)
 
 next steps:
   /buses:name <friendly-name>     give this session a memorable name

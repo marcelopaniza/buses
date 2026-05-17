@@ -6,8 +6,10 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 
 if ! buses::config_exists; then
-  printf 'buses: not initialised. Run /buses:init <shared-path> first.\n'
-  exit 0
+  # config_require prints the helpful legacy-detection hint if applicable
+  # and exits non-zero. If there's no legacy and no config, it dies with a
+  # plain "not initialised" message.
+  buses::config_require
 fi
 
 shared=$(buses::config_get '.shared_path')
@@ -15,7 +17,12 @@ sid=$(buses::config_get '.session_id')
 name=$(buses::config_get '.session_name'); [ -n "$name" ] || name='(unset)'
 created=$(buses::config_get '.created')
 
+cc_sid=$(buses::terminal_id)
 printf 'buses: status\n'
+printf '  terminal:     %s%s\n' \
+  "${cc_sid:-<not set>}" \
+  "$([ -n "$BUSES_CONFIG_DIR_EXPLICIT" ] && echo "  (BUSES_CONFIG_DIR override active)")"
+printf '  project:      %s\n' "$(buses::project_dir)"
 printf '  config:       %s\n' "$BUSES_CONFIG_FILE"
 printf '  shared_path:  %s  ' "$shared"
 [ -d "$shared" ] && printf '[ok]\n' || printf '[MISSING — mount the share]\n'
