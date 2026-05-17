@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "buses",
+  "description": "Cross-terminal message bus for Claude Code sessions. Shared-folder transport, hook-based delivery, no polling.",
+  "owner": {
+    "name": "Marcelo Paniza"
+  },
+  "plugins": [
+    {
+      "name": "buses",
+      "description": "Sessions sign in to named buses on a shared folder; messages are delivered on the next prompt via a UserPromptSubmit hook. Works on a single machine or across machines that share storage (NFS/SMB/Syncthing/Dropbox).",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

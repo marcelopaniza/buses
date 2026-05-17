@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Shared helpers for the buses plugin. Source, don't execute.
+# Portable across Linux and macOS. Requires: bash 3.2+, jq, find, date.
+
+set -u
+
+BUSES_CONFIG_DIR="${BUSES_CONFIG_DIR:-$HOME/.config/buses}"
+BUSES_CONFIG_FILE="$BUSES_CONFIG_DIR/config.json"
+
+# ── output ──────────────────────────────────────────────────────────────────
+buses::err() { printf 'buses: %s\n' "$*" >&2; }
+buses::die() { buses::err "$*"; exit 1; }
+
+# ── dependencies ────────────────────────────────────────────────────────────
+buses::require() {
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || buses::die "missing required command: $cmd"
+  done
+}
+
+# ── UUID generation (portable) ──────────────────────────────────────────────
+buses::uuid() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    cat /proc/sys/kernel/random/uuid
+  elif command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr 'A-Z' 'a-z'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import uuid; print(uuid.uuid4())'
+  else
+    buses::die "no UUID generator available (need uuidgen or python3)"
+  fi
+}
+
+# ── timestamps ──────────────────────────────────────────────────────────────
+buses::now_iso() { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
+buses::now_compact() { date -u +'%Y%m%dT%H%M%SZ'; }
+
+# ── config I/O ──────────────────────────────────────────────────────────────
+buses::config_exists() { [ -f "$BUSES_CONFIG_FILE" ]; }
+
+buses::config_require() {
+  buses::config_exists || buses::die "not initialised — run /buses:init <shared-path> first"
+}
+
+buses::config_get() {
+  # $1 = jq filter (e.g. '.session_id'); falls back to "" on null/missing
+  jq -r "${1} // \"\"" "$BUSES_CONFIG_FILE"
+}
+
+buses::config_set() {
+  # $1 = jq update expression, e.g. '.session_name = $v' with --arg v "foo"
+  # Remaining args are passed to jq verbatim (for --arg / --argjson).
+  local expr="$1"; shift
+  local tmp="${BUSES_CONFIG_FILE}.tmp.$$"
+  jq "$@" "$expr" "$BUSES_CONFIG_FILE" > "$tmp" && mv "$tmp" "$BUSES_CONFIG_FILE"
+}
+
+buses::config_init_file() {
+  # Write a fresh config with shared_path + session_id. $1 = shared_path.
+  local shared_path="$1"
+  local sid
+  sid=$(buses::uuid)
+  mkdir -p "$BUSES_CONFIG_DIR"
+  jq -n \
+    --arg sp "$shared_path" \
+    --arg sid "$sid" \
+    --arg created "$(buses::now_iso)" \
+    '{
+      version: 1,
+      shared_path: $sp,
+      session_id: $sid,
+      session_name: "",
+      buses: [],
+      created: $created
+    }' > "$BUSES_CONFIG_FILE"
+  printf '%s' "$sid"
+}
+
+# ── shared-folder paths ─────────────────────────────────────────────────────
+buses::shared_root() { buses::config_get '.shared_path'; }
+
+buses::bus_dir()      { printf '%s/buses/%s' "$(buses::shared_root)" "$1"; }
+buses::bus_messages() { printf '%s/buses/%s/messages' "$(buses::shared_root)" "$1"; }
+buses::bus_members()  { printf '%s/buses/%s/members' "$(buses::shared_root)" "$1"; }
+
+buses::state_dir() {
+  # Per-session local state (cursors, etc). Lives under config dir, NOT shared,
+  # so cursors are independent per session even if config is on the share.
+  local sid; sid=$(buses::config_get '.session_id')
+  printf '%s/state/%s' "$BUSES_CONFIG_DIR" "$sid"
+}
+
+buses::cursor_file() {
+  # Per-bus cursor for "what's the newest message I've already processed".
+  printf '%s/cursor.%s' "$(buses::state_dir)" "$1"
+}
+
+# ── bus validation ──────────────────────────────────────────────────────────
+buses::bus_exists() { [ -d "$(buses::bus_dir "$1")" ]; }
+buses::is_subscribed() {
+  # $1 = bus name. Returns 0 if subscribed.
+  jq -e --arg b "$1" '.buses | index($b) != null' "$BUSES_CONFIG_FILE" >/dev/null 2>&1
+}
+
+buses::valid_name() {
+  # Bus and session names: 1-64 chars, [a-zA-Z0-9._-]
+  [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+# ── presence ────────────────────────────────────────────────────────────────
+buses::write_member_record() {
+  # Drop / refresh this session's member.json inside a bus. $1 = bus.
+  local bus="$1"
+  local members_dir; members_dir=$(buses::bus_members "$bus")
+  local sid; sid=$(buses::config_get '.session_id')
+  local name; name=$(buses::config_get '.session_name')
+  local host; host=$(hostname 2>/dev/null || echo "unknown")
+  mkdir -p "$members_dir"
+  local tmp="$members_dir/.$sid.tmp.$$"
+  jq -n \
+    --arg id "$sid" \
+    --arg name "$name" \
+    --arg host "$host" \
+    --arg seen "$(buses::now_iso)" \
+    '{id: $id, name: $name, host: $host, last_seen: $seen}' > "$tmp"
+  mv "$tmp" "$members_dir/$sid.json"
+}

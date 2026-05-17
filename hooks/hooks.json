@@ -1,0 +1,16 @@
+{
+  "description": "buses plugin: pull-on-prompt delivery of cross-terminal messages",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/check-messages.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

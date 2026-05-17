@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# /buses:status — summarise this session's config and current subscriptions.
+
+set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+buses::require jq
+
+if ! buses::config_exists; then
+  printf 'buses: not initialised. Run /buses:init <shared-path> first.\n'
+  exit 0
+fi
+
+shared=$(buses::config_get '.shared_path')
+sid=$(buses::config_get '.session_id')
+name=$(buses::config_get '.session_name'); [ -n "$name" ] || name='(unset)'
+created=$(buses::config_get '.created')
+
+printf 'buses: status\n'
+printf '  config:       %s\n' "$BUSES_CONFIG_FILE"
+printf '  shared_path:  %s  ' "$shared"
+[ -d "$shared" ] && printf '[ok]\n' || printf '[MISSING — mount the share]\n'
+printf '  session_id:   %s\n' "$sid"
+printf '  session_name: %s\n' "$name"
+printf '  created:      %s\n' "$created"
+printf '\n  subscriptions:\n'
+
+subs=$(jq -r '.buses[]?' "$BUSES_CONFIG_FILE")
+if [ -z "$subs" ]; then
+  printf '    (none — /buses:join <bus> to subscribe)\n'
+  exit 0
+fi
+
+# Per-bus stats — use --count from check.sh for unread totals.
+while IFS= read -r bus; do
+  [ -n "$bus" ] || continue
+  if buses::bus_exists "$bus"; then
+    mdir=$(buses::bus_messages "$bus")
+    total=$(find "$mdir" -maxdepth 1 -name '*.msg' -type f 2>/dev/null | wc -l | tr -d ' ')
+    cursor=$(buses::cursor_file "$bus")
+    if [ -f "$cursor" ]; then
+      unseen=$(find "$mdir" -maxdepth 1 -name '*.msg' -type f -newer "$cursor" 2>/dev/null | wc -l | tr -d ' ')
+    else
+      unseen=$total
+    fi
+    printf '    %-20s  total=%-5s  newer-than-cursor=%s\n' "$bus" "$total" "$unseen"
+  else
+    printf '    %-20s  [bus missing on shared folder]\n' "$bus"
+  fi
+done <<< "$subs"
