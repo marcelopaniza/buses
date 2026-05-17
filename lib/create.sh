@@ -28,6 +28,9 @@ if [ ! -d "$dir" ]; then
     '{name: $n, created: $c, created_by: $by, driver: $by}' > "$dir/manifest.json"
   created=yes
 fi
+# Idempotent: re-affirm 0700 perms whether we just created or it already existed.
+# Cheap defense for older shares that pre-date the umask change.
+buses::tighten_perms "$bus"
 
 printf 'buses: bus "%s" %s at %s\n' "$bus" \
   "$([ "$created" = yes ] && echo created || echo "already existed")" "$dir"

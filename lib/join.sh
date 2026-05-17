@@ -48,4 +48,7 @@ for cursor in "$(buses::cursor_file "$bus")" "$(buses::notify_cursor_file "$bus"
 done
 
 buses::write_member_record "$bus"
+# Re-affirm tight dir perms on the bus we just joined — covers the case where
+# the bus was created by an older plugin version with looser default perms.
+buses::tighten_perms "$bus"
 printf 'buses: joined "%s" (history before now is hidden — use /buses:read --all to see past messages)\n' "$bus"

@@ -283,6 +283,79 @@ buses::resolve_member() {
   printf ''
 }
 
+# ── message validation ──────────────────────────────────────────────────────
+# Cheap pre-read gate, invoked before any message is delivered to the model
+# or fired as a notification. Returns 0 if the file is well-formed and from
+# a plausible sender, 1 otherwise. Failing files are silently skipped — no
+# error, no token spend.
+BUSES_MSG_MAX_SIZE=102400       # 100 KB total file size
+BUSES_MSG_MAX_BODY=10240        #  10 KB body length
+
+buses::msg_validate() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+
+  # Size cap — refuse anything monstrous before parsing.
+  local sz; sz=$(wc -c < "$f" 2>/dev/null || echo 0)
+  [ "$sz" -le "$BUSES_MSG_MAX_SIZE" ] || return 1
+
+  # Pull frontmatter (between the first two `---` lines).
+  local fm
+  fm=$(awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}' "$f") || return 1
+  [ -n "$fm" ] || return 1
+
+  # Required fields.
+  local m_id m_bus m_from m_ts
+  m_id=$(  printf '%s\n' "$fm" | awk -F': *' '$1=="id"{print $2; exit}')
+  m_bus=$( printf '%s\n' "$fm" | awk -F': *' '$1=="bus"{print $2; exit}')
+  m_from=$(printf '%s\n' "$fm" | awk -F': *' '$1=="from"{print $2; exit}')
+  m_ts=$(  printf '%s\n' "$fm" | awk -F': *' '$1=="ts"{print $2; exit}')
+  [ -n "$m_id" ] && [ -n "$m_bus" ] && [ -n "$m_from" ] && [ -n "$m_ts" ] || return 1
+
+  # UUID-ish (8-4-4-4-12 lowercase hex). Strict enough to refuse spoofed
+  # names in the `from` field while still cheap.
+  local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  [[ "$m_id"   =~ $uuid_re ]] || return 1
+  [[ "$m_from" =~ $uuid_re ]] || return 1
+
+  # Anti-spoof: the `bus` field MUST match the directory the file is in.
+  # File path looks like .../buses/<bus>/messages/<file>.msg
+  local actual_bus
+  actual_bus=$(basename "$(dirname "$(dirname "$f")")")
+  [ "$m_bus" = "$actual_bus" ] || return 1
+
+  # Sender membership: from-uuid must currently appear in this bus's members/
+  # directory. Casts forged or stale senders out at the door. (The driver's
+  # own kick-notices satisfy this because driver is always a member.)
+  local members_dir
+  members_dir=$(dirname "$(dirname "$f")")/members
+  [ -f "$members_dir/$m_from.json" ] || return 1
+
+  # Body length — extract and cap.
+  local body_len
+  body_len=$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$f" | wc -c)
+  [ "$body_len" -le "$BUSES_MSG_MAX_BODY" ] || return 1
+
+  return 0
+}
+
+# ── directory permissions ───────────────────────────────────────────────────
+# Belt-and-braces tightening: even though umask 077 takes care of NEW files
+# and directories created by this version of the plugin, older shares (or
+# manual mkdir) may have left bus dirs at 0755. We re-chmod 0700 on any
+# write path that "owns" a bus (create, join). Idempotent.
+buses::tighten_perms() {
+  local bus="$1"
+  local d
+  for d in \
+    "$(buses::bus_dir "$bus")" \
+    "$(buses::bus_messages "$bus")" \
+    "$(buses::bus_members "$bus")"
+  do
+    [ -d "$d" ] && chmod 700 "$d" 2>/dev/null || true
+  done
+}
+
 # ── presence ────────────────────────────────────────────────────────────────
 buses::write_member_record() {
   # Drop / refresh this session's member.json inside a bus. $1 = bus.

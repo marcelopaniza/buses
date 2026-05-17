@@ -56,6 +56,10 @@ for bus in "${subscribed[@]}"; do
 
   while IFS= read -r f; do
     [ -f "$f" ] || continue
+    # Cheap pre-read gate: skip malformed/oversized/spoofed/orphan-sender
+    # files BEFORE doing any further work or paying any tokens. Invalid
+    # files are silently dropped — never delivered to the model.
+    buses::msg_validate "$f" || continue
     fm=$(awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}' "$f")
     msg_to=$(printf '%s\n'   "$fm" | awk -F': *' '$1=="to"{print $2; exit}')
     msg_from=$(printf '%s\n' "$fm" | awk -F': *' '$1=="from"{print $2; exit}')
