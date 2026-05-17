@@ -4,6 +4,11 @@
 
 set -u
 
+# Restrictive umask for every file the plugin creates. Config carries the
+# session UUID + name; message files contain user content; both should not
+# be world-readable on multi-user machines.
+umask 077
+
 # ── config dir resolution ───────────────────────────────────────────────────
 # Identity is PER-TERMINAL so multiple Claude Code terminals on one machine
 # never share a config. Precedence:
@@ -181,8 +186,15 @@ buses::is_subscribed() {
 }
 
 buses::valid_name() {
-  # Bus and session names: 1-64 chars, [a-zA-Z0-9._-]
-  [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+  # Bus and session names: 1-64 chars from [A-Za-z0-9._-], with explicit
+  # rejection of "." and ".." (which would otherwise be valid by the regex
+  # and would let a bus name resolve OUTSIDE the buses/ subtree on disk).
+  # Also reject leading "." to avoid hidden files/dirs.
+  [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || return 1
+  case "$1" in
+    .|..|.*) return 1 ;;
+  esac
+  return 0
 }
 
 # ── manifest / driver / lock / ban ──────────────────────────────────────────
@@ -230,8 +242,8 @@ buses::is_driver() {
 }
 
 buses::set_driver() {
-  # $1 = bus, $2 = new driver UUID. Writes `.driver` and drops legacy `.manager`.
-  buses::manifest_set "$1" '.driver = $d | del(.manager)' --arg d "$2"
+  # $1 = bus, $2 = new driver UUID. manifest_set already drops legacy .manager.
+  buses::manifest_set "$1" '.driver = $d' --arg d "$2"
 }
 
 buses::is_locked() {

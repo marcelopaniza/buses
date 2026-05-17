@@ -5,7 +5,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/name.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/name.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/lib/name.sh" "$ARGUMENTS"
 ```
 
 Confirm the new name in one short line.

@@ -5,7 +5,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/send.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/send.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/lib/send.sh" "$ARGUMENTS"
 ```
 
 Confirm in one line which bus and recipient received the message.

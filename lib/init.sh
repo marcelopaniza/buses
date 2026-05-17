@@ -7,6 +7,9 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 
+# Re-split: see comment in other lib scripts.
+[ "$#" -le 1 ] && set -- ${1-}
+
 shared="${1:-}"
 force="${2:-}"
 

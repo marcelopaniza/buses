@@ -5,7 +5,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/leave.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/leave.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/lib/leave.sh" "$ARGUMENTS"
 ```
 
 Confirm in one line.

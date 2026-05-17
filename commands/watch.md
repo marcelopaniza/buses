@@ -5,7 +5,7 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/watch.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/watch.sh" $ARGUMENTS
+"${CLAUDE_PLUGIN_ROOT}/lib/watch.sh" "$ARGUMENTS"
 ```
 
 Report the output verbatim. If the user is starting the watcher for the first time, mention that:

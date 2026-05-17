@@ -93,8 +93,9 @@ Every bus has one **driver** (admin). Everyone else is a **rider**.
 | `/buses:unlock <bus>` | Lift the lock. |
 | `/buses:kick <bus> <name-or-uuid> [reason]` | Add to banlist, remove member record, drop a kick-notice for the target. |
 | `/buses:unkick <bus> <name-or-uuid>` | Lift a ban. |
-| `/buses:transfer-driver <bus> <name-or-uuid> [--force]` | Hand the wheel to another rider. `--force` lets any rider take over a bus whose driver is gone. |
+| `/buses:transfer-driver <bus> <name-or-uuid> [--force]` | Hand the wheel to another rider. `--force` lets any rider take over a bus whose driver is gone — gated on the current driver's member record being absent or older than 7 days, to prevent casual takeovers. |
 | `/buses:cleanup-stale <bus> [--older-than 30d] [--dry-run] [--force]` | Remove member records that haven't checked in recently. Driver record is preserved unless `--force`. |
+| `/buses:gc <bus|all> [--older-than 90d] [--dry-run] [--force]` | Delete old messages from a bus (or every bus). Default threshold 90d. |
 
 **Driver privileges are cooperative, not enforced.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the shared folder can bypass. Treat lock/kick as protocol, not security.
 
@@ -202,6 +203,23 @@ If you genuinely need a session to react to messages **with no user input** (e.g
 - All writes are atomic: write to `<dir>/.<file>.tmp.$$`, then `mv` into place. Safe on local FS and most NFS configurations.
 - Cursors are **per-session, stored locally** (in `$BUSES_CONFIG_DIR/state/<uuid>/cursor.<bus>`). They're never written to the shared folder, so two sessions can have wildly different read positions without conflict.
 - No locking. Two senders writing identically-named files at the same nanosecond would collide, but filenames include a UUID short prefix to avoid this.
+
+## Security notes
+
+The plugin is designed for **trusted peers on a cooperative folder**. It is not a security boundary. Specifically:
+
+- **Driver / lock / ban / kick are cooperative.** Anyone with raw write access to the shared folder can bypass them by writing files directly. Treat them as protocol, not security.
+- **Hardening applied (v0.4):** restrictive `umask 077` for all files; bus names `.`/`..`/`.*` rejected (no path traversal); control characters stripped before passing message bodies to native notifiers (notably blocks `osascript -e` newline injection on macOS receivers); message bodies are XML-escaped before injection into the model's `<buses-inbox>` context block (prevents a sender from closing the wrapper and crafting injected instructions); `transfer-driver --force` requires the current driver's record to be absent or >7 days stale.
+- **`$ARGUMENTS` is quoted** in every command file, and lib scripts re-tokenise the single packed arg without shell interpretation. This blocks the simple-metachar case (`;`, `|`, `&`, `$()`). A user typing literal `"` characters in a message body can still potentially break the quoting envelope — this is a Claude Code harness limitation, not specific to buses. Avoid typing `"` in `/buses:send` bodies unless escaped.
+- **`BUSES_NOTIFIER_CMD`**, if set, must be the absolute path of a single executable (no extra args / shell snippet). It is invoked with `"$title"` and `"$body"` as positional args.
+- **Bus messages are prompt-injection vectors** by design — a malicious sender can write content that tries to steer your local Claude. We escape the wrapper-closing characters, but treat received messages with the same scepticism you'd apply to any other untrusted input.
+
+## Garbage collection
+
+- `/buses:cleanup-stale <bus>` — remove inactive member records.
+- `/buses:gc <bus|all>` — remove old `.msg` files. Default: older than 90 days.
+- Watcher log is self-rotated to ~1MB (truncate-on-overflow) by the daemon itself.
+- Per-session config dirs at `~/.config/buses/sessions/<dead-cc-sid>/` accumulate over time. Safe to delete any whose `config.json` references a Claude Code session you no longer have.
 
 ## Troubleshooting
 

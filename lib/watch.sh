@@ -12,6 +12,12 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 buses::config_require
 
+# The matching .md command quotes "$ARGUMENTS" as a single arg for safety
+# against shell metacharacters in user input. Re-split it into positionals
+# here (whitespace-only; no shell interpretation). When tests call the
+# script directly with already-split args, $# > 1 and we leave them alone.
+[ "$#" -le 1 ] && set -- ${1-}
+
 sub="${1:-start}"; shift || true
 
 state_dir=$(buses::state_dir)
@@ -38,7 +44,10 @@ cmd_start() {
   [ "$interval" -ge 1 ] || buses::die "interval must be >= 1 second"
 
   if is_alive; then
-    printf 'buses: watcher already running (pid=%s, interval=%ss)\n' "$(cat "$pid_file")" "${interval}"
+    local running_interval='?'
+    [ -f "$interval_file" ] && running_interval=$(cat "$interval_file" 2>/dev/null)
+    printf 'buses: watcher already running (pid=%s, interval=%ss)\n' \
+      "$(cat "$pid_file")" "$running_interval"
     return 0
   fi
 

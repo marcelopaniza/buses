@@ -155,12 +155,38 @@ if [ "$mode" = "--notify" ]; then
   exit 0
 fi
 
+# Prompt-injection defence for --hook output: a malicious sender could
+# include "</buses-inbox>" or other closing-tag text in their message body to
+# escape the wrapper we put around received messages. Escape the angle
+# brackets (and ampersand for good measure) so the body can never close our
+# own framing tag. We do this ONLY for the model-facing render — the --human
+# path and notifications keep the body verbatim.
+#
+# Note on sed: '&' in the replacement means "the matched text", so we have
+# to write '\&amp;' / '\&lt;' / '\&gt;' to get a literal '&' in the output.
+escape_for_hook() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
 render_one() {
   local bus="$1" f="$2" fm body fn to ts
   fm=$(extract_fm "$f"); body=$(extract_body "$f")
   fn=$(fm_field "$fm" from_name); [ -n "$fn" ] || fn=$(fm_field "$fm" from)
   to=$(fm_field "$fm" to); ts=$(fm_field "$fm" ts)
   printf '[bus=%s] %s → %s  @ %s\n%s\n' "$bus" "$fn" "$to" "$ts" "$body"
+}
+
+render_one_hook() {
+  local bus="$1" f="$2" fm body fn to ts
+  fm=$(extract_fm "$f"); body=$(extract_body "$f")
+  fn=$(fm_field "$fm" from_name); [ -n "$fn" ] || fn=$(fm_field "$fm" from)
+  to=$(fm_field "$fm" to); ts=$(fm_field "$fm" ts)
+  printf '[bus=%s] %s → %s  @ %s\n%s\n' \
+    "$(escape_for_hook "$bus")" \
+    "$(escape_for_hook "$fn")"  \
+    "$(escape_for_hook "$to")"  \
+    "$ts" \
+    "$(escape_for_hook "$body")"
 }
 
 if [ "$mode" = "--hook" ]; then
@@ -171,7 +197,7 @@ if [ "$mode" = "--hook" ]; then
   senders=()
   for entry in "${matches[@]}"; do
     bus="${entry%%$'\t'*}"; f="${entry#*$'\t'}"
-    block+="$(render_one "$bus" "$f")"$'\n---\n'
+    block+="$(render_one_hook "$bus" "$f")"$'\n---\n'
     fm=$(extract_fm "$f")
     fn=$(fm_field "$fm" from_name); [ -n "$fn" ] || fn=$(fm_field "$fm" from)
     senders+=("$fn")

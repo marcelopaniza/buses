@@ -8,6 +8,12 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 buses::config_require
 
+# The matching .md command quotes "$ARGUMENTS" as a single arg for safety
+# against shell metacharacters in user input. Re-split it into positionals
+# here (whitespace-only; no shell interpretation). When tests call the
+# script directly with already-split args, $# > 1 and we leave them alone.
+[ "$#" -le 1 ] && set -- ${1-}
+
 bus="${1:-}"; shift || true
 who="${1:-}"; shift || true
 reason="$*"
@@ -32,7 +38,7 @@ buses::manifest_set "$bus" \
   --arg t "$target"
 
 members_dir=$(buses::bus_members "$bus")
-[ -f "$members_dir/$target.json" ] && rm -f "$members_dir/$target.json"
+rm -f "$members_dir/$target.json"
 
 # Drop a notice file so the kicked session sees it on their next prompt.
 ts_iso=$(buses::now_iso)
@@ -56,7 +62,7 @@ tmp="$msgs_dir/.$fname.tmp.$$"
   printf 'kind: kick-notice\n'
   printf 'ts: %s\n'        "$ts_iso"
   printf -- '---\n'
-  printf 'You have been kicked from bus "%s" by manager %s.%s\n' \
+  printf 'You have been kicked from bus "%s" by driver %s.%s\n' \
     "$bus" "$name" "${reason:+ Reason: $reason}"
 } > "$tmp"
 mv "$tmp" "$msgs_dir/$fname"

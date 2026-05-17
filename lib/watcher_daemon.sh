@@ -27,6 +27,9 @@ sid=$(buses::config_get '.session_id')
 
 state_dir=$(buses::state_dir)
 mkdir -p "$state_dir"
+
+# Path to our own log file, used for in-process rotation in the loop below.
+# Defined here so the loop can reference it without recomputing each pass.
 pid_file="$state_dir/watcher.pid"
 echo $$ > "$pid_file"
 
@@ -51,19 +54,27 @@ notifier=$(detect_notifier)
 
 notify() {
   local bus="$1" from="$2" preview="$3"
+  # Strip every control character from preview before handing it to any
+  # notifier, particularly to osascript -e which interprets a newline as a
+  # statement terminator (would let a crafted message body break out of the
+  # quoted notification string and execute AppleScript). Also strip CRs and
+  # other low ASCII for safety across all notifiers.
+  preview=$(printf '%s' "$preview" | tr -d '\000-\037')
   local title="buses: ${from} on ${bus}"
   if [ -n "${BUSES_NOTIFIER_CMD:-}" ]; then
+    # Intentionally invoked as a single command (no word-splitting): set
+    # BUSES_NOTIFIER_CMD to the absolute path of one executable, not a
+    # shell snippet. Documented in README.
     "$BUSES_NOTIFIER_CMD" "$title" "$preview" 2>/dev/null || true
   elif command -v notify-send >/dev/null 2>&1; then
     notify-send -a buses -u low "$title" "$preview" 2>/dev/null || true
   elif command -v terminal-notifier >/dev/null 2>&1; then
     terminal-notifier -title buses -subtitle "${from} on ${bus}" -message "$preview" >/dev/null 2>&1 || true
   elif command -v osascript >/dev/null 2>&1; then
-    local body_esc title_esc sub_esc
-    body_esc=$(printf '%s' "$preview" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    title_esc="buses"
-    sub_esc=$(printf '%s' "${from} on ${bus}" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    osascript -e "display notification \"$body_esc\" with title \"$title_esc\" subtitle \"$sub_esc\"" 2>/dev/null || true
+    local body_esc sub_esc
+    body_esc=$(printf '%s' "$preview"               | sed 's/\\/\\\\/g; s/"/\\"/g')
+    sub_esc=$(printf '%s' "${from} on ${bus}"       | sed 's/\\/\\\\/g; s/"/\\"/g')
+    osascript -e "display notification \"$body_esc\" with title \"buses\" subtitle \"$sub_esc\"" 2>/dev/null || true
   elif command -v kdialog >/dev/null 2>&1; then
     kdialog --title "$title" --passivepopup "$preview" 8 2>/dev/null || true
   else
@@ -92,6 +103,18 @@ while true; do
     fi
   fi
 
+  # Cap watcher.log at ~1MB by truncating-and-restarting whenever it grows
+  # past the threshold. Cheap (one stat per poll); never bounds total run
+  # time. Done from inside the loop so it tracks the log we're already
+  # writing to, no matter where it lives.
+  log_self="${state_dir}/watcher.log"
+  if [ -f "$log_self" ] && [ "$(wc -c < "$log_self" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+    : > "$log_self"
+    echo "[$(buses::now_iso)] watcher.log rotated (exceeded 1MB)"
+  fi
+
+  # Background sleep so SIGTERM can interrupt the wait — bare `sleep` would
+  # block trap delivery until the interval expired.
   sleep "$interval" &
   wait $!
 done

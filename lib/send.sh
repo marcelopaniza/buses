@@ -15,6 +15,12 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 buses::config_require
 
+# The matching .md command quotes "$ARGUMENTS" as a single arg for safety
+# against shell metacharacters in user input. Re-split it into positionals
+# here (whitespace-only; no shell interpretation). When tests call the
+# script directly with already-split args, $# > 1 and we leave them alone.
+[ "$#" -le 1 ] && set -- ${1-}
+
 bus="${1:-}"; shift || true
 to="${1:-}";  shift || true
 body="$*"

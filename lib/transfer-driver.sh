@@ -13,6 +13,12 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 buses::config_require
 
+# The matching .md command quotes "$ARGUMENTS" as a single arg for safety
+# against shell metacharacters in user input. Re-split it into positionals
+# here (whitespace-only; no shell interpretation). When tests call the
+# script directly with already-split args, $# > 1 and we leave them alone.
+[ "$#" -le 1 ] && set -- ${1-}
+
 bus="${1:-}"
 who="${2:-}"
 force=""
@@ -28,9 +34,25 @@ my_sid=$(buses::config_get '.session_id')
 if [ -z "$force" ]; then
   buses::is_driver "$bus" || buses::die "only the current driver can transfer (use --force if the driver is gone)"
 else
-  # --force: I must at least be a subscribed member of the bus.
+  # --force is the escape hatch for "the driver's machine is dead and the
+  # bus is stuck." It deliberately requires that:
+  #   1. you are subscribed to the bus (so you have skin in the game)
+  #   2. the current driver has no member record, OR their last_seen is
+  #      older than 7 days — i.e. they really are absent, not just AFK
+  #      for a coffee break. This is cooperative enforcement (the share is
+  #      a cooperative folder; a determined peer can bypass), but it's
+  #      explicit so casual misuse is visible to everyone.
   if ! buses::is_subscribed "$bus"; then
     buses::die "you must be subscribed to '$bus' to take it over (--force)"
+  fi
+  if [ -n "$current_drv" ]; then
+    drv_record="$(buses::bus_members "$bus")/$current_drv.json"
+    if [ -f "$drv_record" ]; then
+      # mtime check: 7 days old? GNU find supports +7; BSD find too.
+      if ! find "$drv_record" -mtime +7 -print -quit 2>/dev/null | grep -q .; then
+        buses::die "current driver $current_drv was active in the last 7 days — refusing --force takeover (delete their member record manually if you are SURE they are gone)"
+      fi
+    fi
   fi
 fi
 

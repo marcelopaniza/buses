@@ -37,7 +37,9 @@ if [ -z "$subs" ]; then
   exit 0
 fi
 
-# Per-bus stats — use --count from check.sh for unread totals.
+# Per-bus stats — count all messages and those newer than the cursor.
+# (Cursor-newer is a superset of "actually addressed to me" — it's the
+# delivery queue length, not the per-recipient unread.)
 while IFS= read -r bus; do
   [ -n "$bus" ] || continue
   if buses::bus_exists "$bus"; then
