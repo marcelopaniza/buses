@@ -38,17 +38,10 @@ done
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
 buses::is_driver "$bus"  || buses::die "only the driver of '$bus' can run cleanup"
 
-# Parse duration into a find-friendly flag.
-# Examples: 30d → -mtime +30; 12h → -mmin +720; 90m → -mmin +90.
-num="${older_than%[mhd]}"
-unit="${older_than: -1}"
-case "$num" in ''|*[!0-9]*) buses::die "bad --older-than: $older_than" ;; esac
-case "$unit" in
-  d) find_flag=(-mtime "+${num}") ;;
-  h) find_flag=(-mmin  "+$((num * 60))") ;;
-  m) find_flag=(-mmin  "+${num}") ;;
-  *) buses::die "bad --older-than unit '$unit' (use m, h, or d)" ;;
-esac
+# Duration → find flag (shared helper).
+mapfile -t find_flag < <(buses::parse_duration "$older_than") \
+  || buses::die "bad --older-than: $older_than (use Nd / Nh / Nm)"
+[ "${#find_flag[@]}" -eq 2 ] || buses::die "bad --older-than: $older_than"
 
 drv=$(buses::driver_uuid "$bus")
 mdir=$(buses::bus_members "$bus")

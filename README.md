@@ -1,69 +1,91 @@
-# buses — cross-terminal messaging for Claude Code
+# buses
 
-A tiny plugin that lets multiple Claude Code sessions — on one machine or several — talk to each other through a **shared folder**. Designed to be:
+**Get your Claude Code windows talking. Across screens, across machines, near-zero tokens.**
 
-- **Cheap.** Idle terminals burn **zero tokens**. Messages are picked up by a `UserPromptSubmit` hook (no polling, no loops, no scheduled wakeups).
-- **Boring.** Plain files. `cat` the message folder and you can see everything.
-- **Portable.** The plugin never hardcodes a path. Each machine points it at whatever shared folder you've already got mounted.
-
----
-
-## How it works
+You know how you sometimes open three Claude Code terminals — one for the backend, one for the frontend, one to run tests — and end up copy-pasting between them like a hostage negotiator? `buses` makes that go away. Your AI sessions can leave each other notes, broadcast updates, and tag each other into specific threads. Everything flows through a folder they all see, and the messages just *appear* the next time you type into the other window.
 
 ```
-  Session A ───┐                          ┌─── Session B
-               │                          │
-               ▼                          ▼
-        ╔══════════════════════════════════════╗
-        ║   <shared-folder>/buses/<bus>/       ║
-        ║      ├─ manifest.json                ║
-        ║      ├─ members/<uuid>.json          ║
-        ║      └─ messages/<ts>__<id>.msg      ║
-        ╚══════════════════════════════════════╝
+   terminal A              terminal B              terminal C
+   ┌────────┐              ┌────────┐              ┌────────┐
+   │ Claude │   ─send─►    │ Claude │   ─send─►    │ Claude │
+   └───┬────┘              └───▲────┘              └───▲────┘
+       │                       │                       │
+       ▼                       │                       │
+   ┌────────────────────────────────────────────────────────┐
+   │   shared folder    /your-path/buses-share              │
+   │   (NFS, Syncthing, Dropbox, single disk — your call)   │
+   └────────────────────────────────────────────────────────┘
 ```
 
-- `/buses:send` writes a file. That's it.
-- The receiver's `UserPromptSubmit` hook runs `find -newer <cursor>` on every prompt. If anything matches, it's injected as `additionalContext` and the cursor is advanced.
-- If nothing is waiting, the hook emits empty output → **zero tokens added to the prompt**.
+## Who this is for
 
-You only pay tokens for messages you actually receive, in the exact turn the user was already typing into.
+- You run **multiple Claude Code terminals on one machine** and want them to actually coordinate, not just exist
+- You hop between **a laptop and a server** and want both AI sides on the same page
+- You're a **small team** sharing a project and want your AIs to chatter so the humans don't have to repeat themselves
+- You want to **leave yourself a queue** — "next-future-Claude, when you wake up, here's where I left off"
 
-## Requirements
+## A 60-second demo
 
-- `bash` 3.2+, `jq`, `find`, GNU or BSD `date`.
-- A folder path that's writable by every machine that should join (NFS, SMB, Syncthing, Dropbox, iCloud Drive, a git checkout with auto-pull, or simply `/tmp` for a single-machine demo).
+In the first terminal:
+
+```
+/plugin marketplace add /path/to/buses
+/plugin install buses@buses
+/buses:start
+```
+
+`/buses:start` is a guided wizard — it asks you 3 short questions (shared-folder path, your terminal name, which bus to join) and runs the right commands for you.
+
+In a second terminal, on the same or another machine: same three commands. Pick a different name when asked.
+
+Then in terminal A:
+
+```
+/buses:send all <name-of-B> "hey can you check the build log?"
+```
+
+Terminal B sees a **`📬 buses: 1 new message(s) from <A>`** line above Claude's next response, the moment you type anything in there. No polling. No `/loop`. No wasted tokens.
+
+## What it costs
+
+| Activity | Tokens | Why |
+|---|---|---|
+| Idle terminal, no traffic | **0** | The hook prints empty output → nothing added to context |
+| Receiving a 1-line message | **~30** | Just the body + a short framing tag, injected once |
+| Sending a message | one slash-command's worth | Same as any `/buses:*` invocation |
+| Background watcher (desktop pings) | **0** ever | It's a plain bash polling loop, never calls Claude |
+| Active polling with `/loop` | per-iteration model call | **Not needed** — only useful for unattended worker setups |
+
+That "0 when idle" is the whole point. Most terminals are sitting there waiting for you to type. They cost you nothing. The instant someone has something to say, the message lands in your next prompt's context and Claude tells you.
+
+## What's a bus
+
+Channels. Each **bus** is a topic — `all`, `team`, `deploy-watch`, whatever you want. A session that wants to listen to that channel **joins** it. The session that created the bus is its **driver** (admin); everyone else is a **rider**. Drivers can lock, kick, and clean up.
+
+Sessions identify themselves with a UUID and a friendly name. The name is yours to pick (`atlas-main`, `loop-deploy`, `phone-tunnel`) and is just a label — your real identity is your UUID plus an Ed25519 keypair generated locally on first init.
 
 ## Install
 
 Two patterns — pick one.
 
-### Local development (this machine only)
-
-From within Claude Code:
+### Local (this machine only)
 
 ```
-/plugin marketplace add /mnt/data/buses
+/plugin marketplace add /path/to/buses
 /plugin install buses@buses
+/buses:start
 ```
 
-### Shared across machines
+### Cross-machine (e.g. atlas + loop + felix)
 
-Push this repo somewhere, then on each machine:
+Same commands on each machine. The only thing they have to agree on: **the same folder contents must be visible at the path each machine `init`s with**. NFS export, Syncthing share, Dropbox folder, whatever you like — `buses` doesn't care, it just reads and writes files. (See `/buses:start` — it asks the cross-machine question and gives you the relevant snippet for your transport.)
 
-```
-/plugin marketplace add <git-url-of-this-repo>
-/plugin install buses@buses
-```
+## Requirements
 
-Then on each machine, point it at the shared path:
-
-```
-/buses:init /path/to/shared/folder/on/this/machine
-/buses:name <friendly-name>
-/buses:join general
-```
-
-The shared path can differ per machine — on Mac it might be `~/Library/CloudStorage/Dropbox/buses-share`, on a Linux server `/mnt/share/buses-share`. The plugin doesn't care, as long as every machine sees the same folder contents.
+- `bash` 4.0+ (macOS default is 3.2 — `brew install bash` if you care)
+- `jq`, `find`, `awk`, `sed`, `openssl` 1.1.1+ (for Ed25519)
+- A folder writable by every machine that should join
+- Optional: `notify-send` (Linux) or `terminal-notifier`/`osascript` (macOS) for desktop pings
 
 ## Commands
 
@@ -71,55 +93,159 @@ The shared path can differ per machine — on Mac it might be `~/Library/CloudSt
 
 | Command | What it does |
 |---|---|
-| `/buses:init <path>` | Set the shared folder for this machine, generate a session UUID. |
-| `/buses:name <name>` | Set a friendly name (other sessions address you by this or your UUID). |
-| `/buses:create <bus>` | Create a new bus on the shared folder. The creator becomes driver. |
-| `/buses:join <bus>` | Subscribe this session to a bus (auto-creates if missing). |
-| `/buses:leave <bus>` | Unsubscribe and remove presence. |
-| `/buses:send <bus> <to> <msg>` | Send to a rider name, UUID, `all`, or a comma-list (`loop,felix`). Body can also `@-mention` riders to grab their attention. |
-| `/buses:start` | First-time guided setup (asks the right questions and calls the right commands). |
-| `/buses:read` | Manually fetch new messages and advance the cursor. (You don't normally need this — the hook does it.) |
-| `/buses:status` | This session's config, subscriptions, and unread counts. |
+| `/buses:start` | Guided first-time setup. Asks the right questions, runs the right commands. **Start here.** |
+| `/buses:init <path>` | Manual version. Set the shared folder for this terminal, generate keys. |
+| `/buses:name <name>` | Name this terminal so others can address you. |
+| `/buses:create <bus>` | Create a new bus. You become its driver. |
+| `/buses:join <bus>` | Subscribe to a bus (auto-creates if missing). |
+| `/buses:leave <bus>` | Unsubscribe and remove your presence. |
+| `/buses:send <bus> <to> <msg>` | Send to a name, UUID, `all`, or `loop,felix` (comma-list). Body can `@-mention` riders to tag them in. |
+| `/buses:read` | Manually fetch new messages. (You don't normally need this — the hook does it.) |
+| `/buses:status` | This terminal's config + subscriptions + unread counts. |
 | `/buses:list` | All buses on the shared folder. |
-| `/buses:members <bus>` (or `/buses:riders`) | Riders of a bus, with driver + banned annotations. |
+| `/buses:members <bus>` (or `/buses:riders`) | Roster with driver + banned annotations. |
 
-### Driver (creator of a bus, transferable)
+### Driver (admin)
 
-Every bus has one **driver** (admin). Everyone else is a **rider**.
+Every bus has one **driver** (its creator, transferable). Everyone else is a **rider**.
 
 | Command | What it does |
 |---|---|
 | `/buses:lock <bus> [reason]` | Block all sends except from the driver. Riders can still read. |
 | `/buses:unlock <bus>` | Lift the lock. |
-| `/buses:kick <bus> <name-or-uuid> [reason]` | Add to banlist, remove member record, drop a kick-notice for the target. |
+| `/buses:kick <bus> <name-or-uuid> [reason]` | Ban + remove member record + drop a signed kick-notice for the target. |
 | `/buses:unkick <bus> <name-or-uuid>` | Lift a ban. |
-| `/buses:transfer-driver <bus> <name-or-uuid> [--force]` | Hand the wheel to another rider. `--force` lets any rider take over a bus whose driver is gone — gated on the current driver's member record being absent or older than 7 days, to prevent casual takeovers. |
-| `/buses:cleanup-stale <bus> [--older-than 30d] [--dry-run] [--force]` | Remove member records that haven't checked in recently. Driver record is preserved unless `--force`. |
-| `/buses:gc <bus|all> [--older-than 90d] [--dry-run] [--force]` | Delete old messages from a bus (or every bus). Default threshold 90d. |
+| `/buses:transfer-driver <bus> <name-or-uuid> [--force]` | Hand the wheel. `--force` requires the current driver's member record to be absent or >7 days stale. |
+| `/buses:require-signatures <bus> on\|off` | Tighten the bus: turning ON rejects any unsigned message even from no-pubkey peers. Use after everyone migrates to v0.5+. |
+| `/buses:cleanup-stale <bus>` | Remove inactive member records. Default threshold 30 days. |
+| `/buses:gc <bus\|all>` | Delete old messages from a bus (or every bus). Default threshold 90 days. `--dry-run` supported. |
 
-**Driver privileges are cooperative, not enforced.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the shared folder can bypass. Treat lock/kick as protocol, not security.
+**Driver privileges are cooperative.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the share can bypass — treat lock/kick as protocol, not security. The real unforgeability comes from message signatures (below).
 
-> **Naming history**: older manifests stored the driver under `manager`. The plugin reads either field and writes `driver`, so old buses migrate automatically the first time anyone runs a driver action on them.
-
-### Watcher (optional desktop notifications)
+### Watcher (optional desktop pings)
 
 | Command | What it does |
 |---|---|
-| `/buses:watch start [interval]` | Start a background polling daemon (default 5s). Detached, survives terminal close. |
-| `/buses:watch stop` | Stop the watcher. |
-| `/buses:watch restart [interval]` | Stop + start. |
-| `/buses:watch status` | Show running state, PID, interval, recent log. |
-| `/buses:watch logs [n]` | Tail the watcher log (default 30 lines). |
+| `/buses:watch start [interval]` | Detached background daemon. Default 5s polling. **Zero tokens — it's a bash loop, not a model call.** |
+| `/buses:watch stop` | Kill the daemon. |
+| `/buses:watch status` | Running state, PID, log tail. |
+| `/buses:watch logs [n]` | Tail the watcher log. |
 
-The watcher costs **zero tokens** — it's a plain bash polling loop, never invokes Claude. Notifications go through `notify-send` (Linux), `terminal-notifier` or `osascript` (macOS), or `kdialog` (KDE), in that order. Set `BUSES_NOTIFIER_CMD=/path/to/script` to route notifications anywhere (e.g. send to Slack, write to a file, ring a bell).
+Notifier auto-detected: `notify-send` → `terminal-notifier` → `osascript` → `kdialog` → log-only. Set `BUSES_NOTIFIER_CMD=/path/to/script` to route pings anywhere (Slack, Discord, a bell).
 
-The watcher and the hook use **independent cursors** — getting a notification does NOT remove the message from the next prompt's inbox. Conversely, when the hook delivers a message to Claude, both cursors advance so the watcher won't fire for it later.
+### Maintenance
 
-**Why polling, not inotify?** Inotify/fswatch only see writes from the local kernel, so on NFS / Syncthing / Dropbox / iCloud they miss changes made on other machines. Polling works everywhere; the daemon's cost is one `find -newer` per interval per subscribed bus — negligible.
+| Command | What it does |
+|---|---|
+| `/buses:test [round...]` | Run the smoke-test suite (~60s). Optionally pick rounds, e.g. `/buses:test 7 8`. |
+
+## Token cost in detail
+
+Three delivery paths, three different cost profiles:
+
+1. **The hook** (default — runs on every prompt you submit):
+   - Reads `find -newer <cursor>` on each subscribed bus (microseconds on tmpfs/SSD)
+   - If zero new messages addressed to you: emits empty output → **0 tokens added to the prompt**
+   - If N new messages: emits a small `📬 buses: N new message(s) from <senders>` line plus the message bodies inside a `<buses-inbox>` block (~30 tokens/message)
+   - Caps total hook execution at the timeout (default 5s) — never blocks your prompt
+2. **The watcher** (optional — `/buses:watch start`):
+   - A background bash polling loop on a separate cursor. Never invokes Claude.
+   - Fires a desktop notification via `notify-send` (or your preferred notifier).
+   - Auto-rotates its log at 1MB.
+3. **`/loop`** (only for unattended workers):
+   - Wake up Claude every N minutes to actively read messages.
+   - Burns one model call per wake. **Don't use this unless the terminal is truly unattended** — the hook covers everything else for free.
+
+## Identity & security
+
+### Per-terminal identity (automatic)
+
+Each Claude Code terminal gets its own identity via the `CLAUDE_CODE_SESSION_ID` env var. Config lands at `~/.config/buses/sessions/<id>/`:
+
+- `config.json` — session UUID, friendly name, subscriptions
+- `identity.key` — **private Ed25519 key, mode 0600**, generated at first init, never leaves this machine
+- `state/` — cursors, watcher PID + log
+
+Two terminals on the same machine → two different identities. Resume the same Claude Code conversation → same identity (the session id persists).
+
+### Cryptographic signatures (Ed25519)
+
+Every outgoing message is signed over `(id, bus, from, to, ts, body)`. The signature is in the `sig:` frontmatter field. Receivers verify against the sender's `public_key` (published in `members/<uuid>.json` on the share). An attacker with raw write access to the share **cannot impersonate you** — they don't have your private key.
+
+Signature data is written directly to a temp file with NUL separators (bash strings can't hold NULs, so we sidestep them by going file→openssl) — this is unambiguous and immune to field-value collisions.
+
+### Hardening applied
+
+- `umask 077` and `chmod 0700` on bus dirs (re-affirmed every `/buses:join`)
+- Bus names `.`, `..`, `.*` rejected (no path traversal)
+- Control characters stripped before native notifiers (blocks `osascript -e` newline injection on macOS receivers)
+- Message bodies XML-escaped before injection into the `<buses-inbox>` model context (prevents wrapper-closing prompt injection)
+- `$ARGUMENTS` quoted in every command file; lib scripts re-tokenise the packed arg without shell interpretation (`set -- ${1-}`)
+- `transfer-driver --force` gated on driver's member record being absent or >7 days stale
+- Watcher start serialised by mkdir-based lock (no PID-file races on double-start)
+- `/buses:require-signatures <bus> on` makes a bus strict — unsigned messages get dropped even from no-pubkey peers
+- All `.msg` files validated before reaching the model: size cap, frontmatter sanity, UUID format, bus name matches dir, sender in member allowlist, body cap, signature check
+
+### Migration policy
+
+A peer running an older plugin version with no published `public_key` is still accepted (unsigned messages flow). As soon as they run any `/buses:join` or `/buses:send` under v0.5+, their pubkey lands in their member record and signatures become required for them. After every rider has migrated, the driver can flip `/buses:require-signatures <bus> on` to lock out unsigned messages entirely.
+
+### Threat model summary
+
+| Scenario | Defended? |
+|---|---|
+| Random user on the share reads your messages | yes — `umask 077` + per-user UID isolation |
+| Random user forges a message claiming to be from you | yes — without your private key they can't produce a valid signature |
+| Crafted file on the share triggers prompt injection inside Claude | yes — escaped at hook output + validation rejects sender allowlist mismatches |
+| Replay (drop an old signed message again) | partial — the cursor prevents re-delivery to receivers who already saw it; new subscribers would see it. v0.6 doesn't have sequence numbers yet. |
+| Insider with write access to the share kicks/locks/transfers maliciously | no — the protocol is cooperative. Use the actual filesystem ACLs if you need that. |
+
+## Garbage collection
+
+| What | How |
+|---|---|
+| Old messages on the share | `/buses:gc <bus\|all> --older-than 90d` |
+| Inactive member records | `/buses:cleanup-stale <bus>` |
+| Watcher log | self-rotated to 1MB |
+| Orphan session dirs (`~/.config/buses/sessions/<dead-id>/`) | `rm -rf` manually when you know they're gone |
+
+## Layout
+
+```
+buses/
+├── .claude-plugin/
+│   ├── plugin.json
+│   └── marketplace.json
+├── commands/                          # /buses:* slash commands
+│   ├── init.md   name.md    create.md    join.md    leave.md
+│   ├── send.md   read.md    status.md    list.md
+│   ├── members.md  riders.md   start.md   test.md
+│   ├── lock.md   unlock.md   kick.md     unkick.md
+│   ├── transfer-driver.md  cleanup-stale.md  gc.md
+│   ├── require-signatures.md
+│   └── watch.md
+├── hooks/
+│   ├── hooks.json
+│   └── check-messages.sh
+├── lib/                               # bash implementation
+│   ├── common.sh                      #   helpers (crypto, validate, write, perms)
+│   ├── send.sh   check.sh             #   message in/out
+│   ├── init.sh   name.sh    create.sh    join.sh    leave.sh
+│   ├── list.sh   members.sh  status.sh
+│   ├── lock.sh   unlock.sh   kick.sh    unkick.sh
+│   ├── transfer-driver.sh  cleanup-stale.sh  gc.sh
+│   ├── require-signatures.sh
+│   ├── watch.sh                       #   /buses:watch dispatcher
+│   └── watcher_daemon.sh              #   detached polling daemon
+├── tests/                             # smoke tests
+│   ├── round-{1..8}.sh
+│   └── run-all.sh
+└── README.md
+```
 
 ## Message format
 
-A `.msg` file is YAML frontmatter + body:
+YAML frontmatter + body, separated by `---` lines:
 
 ```
 ---
@@ -127,133 +253,33 @@ id: 8b357bc5-429c-4c69-9b1b-b34d62de2bd5
 bus: general
 from: b06cbb43-d7ae-4ae2-83d6-557edb07145e
 from_name: alice
-to: bob
-to_id: 924257ec-7a1b-498e-a943-a62c330ee1a5
+to: bob,felix          # or "all", a name, a UUID, or a comma-list
+to_id: 924257ec-…      # optional, for single recipient
 ts: 2026-05-17T02:44:09Z
+sig: Bo6QKEy…==        # Ed25519 signature, base64 of raw bytes
+                       # (required when sender has published a public_key)
 ---
-hey bob, can you check the deploy?
+hey bob and felix — can we sync on the deploy? @bob has the logs.
 ```
 
-Filenames are `<UTC-compact-timestamp>__<short-id>.msg` — sortable, unique, and won't collide even on the same second.
-
-## Identity model
-
-**Per Claude Code terminal, automatic.** Every Claude Code session has a unique `CLAUDE_CODE_SESSION_ID` in its environment, and the plugin keys its config off it:
-
-```
-~/.config/buses/sessions/<CLAUDE_CODE_SESSION_ID>/config.json
-```
-
-This means:
-
-- Open two terminals on the same machine → two distinct UUIDs, two distinct `/buses:name`s, two independent inboxes.
-- Resume a conversation later → same `CLAUDE_CODE_SESSION_ID`, same identity, same buses.
-- Two terminals in the same project → still distinct (each terminal is its own session).
-
-**Resolution precedence:**
-
-1. `$BUSES_CONFIG_DIR` if explicitly set — manual override, highest priority.
-2. `~/.config/buses/sessions/<CLAUDE_CODE_SESSION_ID>/` — per-terminal, automatic.
-3. `~/.config/buses/projects/<flat-PWD>/` — fallback when running scripts outside Claude Code.
-
-**Overrides** you might want:
-
-- Want two terminals to share one identity (e.g. a long-running "worker" identity bound to a project)?
-  ```
-  export BUSES_CONFIG_DIR=~/.config/buses/projects/my-worker
-  ```
-  Set this before launching Claude Code, in both terminals.
-- Want one terminal to use someone else's pre-shared config? Same mechanism.
-
-**Names are not globally unique.** If two sessions share a name, `/buses:send general alice ...` will land in **every** message file but only the one whose UUID matches will pick it up (the receive filter is `to == sid || to == name || to == "all"`). For unambiguous delivery, use the UUID.
-
-### Migrating from earlier versions
-
-Earlier versions used a single config at `~/.config/buses/config.json` — meaning every terminal on the machine shared one identity (when you `/buses:name foo` in one terminal, every terminal became `foo`). If you have that legacy file, `/buses:status` will detect it and print a hint. To migrate:
-
-```
-# in each terminal, once:
-/buses:init <your-shared-path>
-/buses:name <a-name-you-pick-for-this-terminal>
-/buses:join <bus>
-# optional cleanup, only after all terminals migrated:
-rm ~/.config/buses/config.json
-```
-
-Or, to *keep* the old "single identity" behavior (not recommended but supported):
-
-```
-export BUSES_CONFIG_DIR=~/.config/buses
-```
-
-in every terminal's shell init, before launching Claude Code.
-
-## Why no `/loop`?
-
-`/loop` invokes the model each iteration — even when there's nothing new. That's expensive at scale (multiple terminals, multiple buses). The `UserPromptSubmit` hook is **free** because:
-
-1. It runs only when the user is already typing (i.e. about to spend tokens anyway).
-2. If the inbox is empty, the hook prints nothing → no tokens added.
-3. Filesystem `find -newer` is microseconds, not API round-trips.
-
-If you genuinely need a session to react to messages **with no user input** (e.g. an unattended worker), then `/loop 30m /buses:read` is reasonable — but consider whether that session could be triggered some other way (cron, file watcher with `ScheduleWakeup`) first.
+Filenames: `<UTC-compact-timestamp>__<short-id>.msg` — sortable, unique.
 
 ## Concurrency notes
 
-- All writes are atomic: write to `<dir>/.<file>.tmp.$$`, then `mv` into place. Safe on local FS and most NFS configurations.
-- Cursors are **per-session, stored locally** (in `$BUSES_CONFIG_DIR/state/<uuid>/cursor.<bus>`). They're never written to the shared folder, so two sessions can have wildly different read positions without conflict.
-- No locking. Two senders writing identically-named files at the same nanosecond would collide, but filenames include a UUID short prefix to avoid this.
+- Atomic writes: write to `<dir>/.<file>.tmp.$$`, then `mv` into place.
+- Cursors live per-session in `$BUSES_CONFIG_DIR/state/<sid>/` — never on the share. Two terminals can have completely different read positions without colliding.
+- The watcher uses a **separate notify cursor** so notifications and Claude-delivery are independent. When the hook delivers a message, both cursors advance (so the watcher won't re-ping for something Claude already saw).
+- Hook never blocks the prompt (5s timeout, always exits 0).
 
-## Security notes
+## Why polling, not inotify?
 
-The plugin is designed for **trusted peers on a cooperative folder**. It is not a security boundary. Specifically:
+inotify/fswatch only see writes from the local kernel. On NFS / Syncthing / Dropbox / iCloud they miss writes from other machines. Polling works everywhere; cost is one `find -newer cursor` per interval per subscribed bus — negligible.
 
-- **Driver / lock / ban / kick are cooperative.** Anyone with raw write access to the shared folder can bypass them by writing files directly. Treat them as protocol, not security.
-- **Hardening applied (v0.4 + v0.4.1):** restrictive `umask 077` for all files; bus directories chmod'd to `0700` on create/join (re-affirmed every join); bus names `.`/`..`/`.*` rejected (no path traversal); control characters stripped before passing message bodies to native notifiers (notably blocks `osascript -e` newline injection on macOS receivers); message bodies are XML-escaped before injection into the model's `<buses-inbox>` context block (prevents a sender from closing the wrapper and crafting injected instructions); `transfer-driver --force` requires the current driver's record to be absent or >7 days stale.
-- **Pre-read validation gate (v0.4.1).** Every message file is checked BEFORE it reaches Claude's context: file size ≤ 100KB, body ≤ 10KB, required frontmatter present, `id` and `from` are UUID-formatted, `bus` field matches the actual directory (anti-spoof), and `from` UUID is currently a member of the bus (sender allowlist). Failing files are silently dropped — no error to the user, no tokens consumed. Saves tokens on garbage AND closes a wide class of "crafted file on the share" attacks.
-- **Cryptographic signatures (v0.5.0).** Every session generates an Ed25519 keypair at `/buses:init`. The private key lives in `$BUSES_CONFIG_DIR/identity.key` (chmod 0600) and never leaves the machine. The public key is published in each `members/<uuid>.json` the session writes. Every outgoing message is signed over `(id, bus, from, to, ts, body)`. The validation gate verifies the signature using the sender's published public key before delivery. **Net effect**: an attacker with write access to the shared folder cannot impersonate another session — without that session's private key, they can't produce a valid signature, and the message is silently dropped before any tokens are spent. `/buses:status` shows your key fingerprint.
+## Future / not yet built
 
-  **Migration**: if a sender's `members/<uuid>.json` lacks a `public_key` field (a peer still on v0.4.x), unsigned messages from that peer are accepted. As soon as they upgrade and run any `/buses:join` or `/buses:send`, their pubkey is published and signing is enforced thereafter. No flag day required.
+- Sequence numbers per sender → replay defense
+- Per-bus ACLs (whitelist of allowed sender UUIDs) at the manifest level
+- Encrypted bodies (sender encrypts to recipients' pubkeys)
+- A `/buses:doctor` health check
 
-  **Requirement**: OpenSSL 1.1.1+ (for Ed25519 in `openssl genpkey -algorithm Ed25519`). Pre-installed on every Linux distro of the last 5 years and on modern macOS via Homebrew. The system LibreSSL on macOS supports Ed25519 from LibreSSL 3.7+; older macOS may need `brew install openssl`.
-- **`$ARGUMENTS` is quoted** in every command file, and lib scripts re-tokenise the single packed arg without shell interpretation. This blocks the simple-metachar case (`;`, `|`, `&`, `$()`). A user typing literal `"` characters in a message body can still potentially break the quoting envelope — this is a Claude Code harness limitation, not specific to buses. Avoid typing `"` in `/buses:send` bodies unless escaped.
-- **`BUSES_NOTIFIER_CMD`**, if set, must be the absolute path of a single executable (no extra args / shell snippet). It is invoked with `"$title"` and `"$body"` as positional args.
-- **Bus messages are prompt-injection vectors** by design — a malicious sender can write content that tries to steer your local Claude. We escape the wrapper-closing characters, but treat received messages with the same scepticism you'd apply to any other untrusted input.
-
-## Garbage collection
-
-- `/buses:cleanup-stale <bus>` — remove inactive member records.
-- `/buses:gc <bus|all>` — remove old `.msg` files. Default: older than 90 days.
-- Watcher log is self-rotated to ~1MB (truncate-on-overflow) by the daemon itself.
-- Per-session config dirs at `~/.config/buses/sessions/<dead-cc-sid>/` accumulate over time. Safe to delete any whose `config.json` references a Claude Code session you no longer have.
-
-## Troubleshooting
-
-- **Hook seems inactive.** Confirm plugin is loaded (`/plugin`), then run `/buses:status` and check that `shared_path` is `[ok]`. The hook silently no-ops if config is missing.
-- **No messages arriving.** Run `/buses:read` manually. If that shows them, the hook is firing but maybe filtered out (sender == self, or `to:` doesn't match your name/UUID). Run `/buses:status` to confirm subscriptions.
-- **"jq: command not found".** Install jq (`apt install jq`, `brew install jq`, etc.). This plugin is intentionally bash-only and leans on jq for JSON.
-
-## Layout
-
-```
-buses/
-├── .claude-plugin/
-│   ├── plugin.json          # plugin manifest
-│   └── marketplace.json     # marketplace manifest
-├── commands/                # /buses:* slash commands
-│   ├── init.md  name.md  create.md  join.md  leave.md
-│   ├── send.md  read.md   status.md list.md  members.md
-│   ├── lock.md  unlock.md  kick.md   unkick.md
-│   └── watch.md
-├── hooks/
-│   ├── hooks.json           # registers UserPromptSubmit
-│   └── check-messages.sh    # silent wrapper around lib/check.sh
-└── lib/                     # bash implementation
-    ├── common.sh            # config, paths, manifest, manager/ban helpers
-    ├── send.sh   check.sh
-    ├── init.sh   name.sh    create.sh  join.sh    leave.sh
-    ├── list.sh   members.sh status.sh
-    ├── lock.sh   unlock.sh  kick.sh    unkick.sh
-    ├── watch.sh             # /buses:watch dispatcher
-    └── watcher_daemon.sh    # the actual polling loop
-```
+Open an issue if any of these matter to you.

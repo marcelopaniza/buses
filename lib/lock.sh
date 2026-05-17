@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# /buses:lock <bus> [reason...] — driver-only: lock a bus so only the manager
+# /buses:lock <bus> [reason...] — driver-only: lock a bus so only the driver
 # can send. Members can still read.
 
 set -euo pipefail

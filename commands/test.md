@@ -1,0 +1,11 @@
+---
+description: "Run the buses smoke test suite (~60s wall clock). Pass round numbers to limit, e.g. /buses:test 3 7."
+argument-hint: "[round-numbers...]"
+allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/tests/run-all.sh:*)"]
+---
+
+```!
+"${CLAUDE_PLUGIN_ROOT}/tests/run-all.sh" $ARGUMENTS
+```
+
+Report the outcome in one line ("ALL N rounds passed" or "X round(s) failed: …"). If any round failed, surface the captured tail; otherwise stop.

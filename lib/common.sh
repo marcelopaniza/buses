@@ -285,14 +285,29 @@ buses::resolve_member() {
 }
 
 # ── frontmatter helpers ─────────────────────────────────────────────────────
-# Extract a frontmatter field's value, preserving every character after the
-# first ": " separator. The previous `awk -F': *'` pattern broke fields whose
-# values contained a colon (most notably ISO timestamps like
-# "2026-05-17T15:46:56Z" — only the part before the first colon was kept,
-# which silently corrupted signed canonicals).
+# Extract a frontmatter field's value. Robust to:
+#   - colons in the value (timestamps): captures everything after the first
+#     ": " separator, not just up to the next ":".
+#   - prefix-name collisions: `from` no longer matches `from_name`, since
+#     the pattern anchors on the literal ": " and requires the line to end
+#     after the value (\1$).
+# Callers must pass literal field names with no regex metacharacters; that's
+# enforced by convention (all field names are short ASCII identifiers).
 buses::fm_field() {
   # $1 = frontmatter text, $2 = field name. Echoes value or empty.
-  printf '%s\n' "$1" | sed -n "s/^${2}: //p" | head -n 1
+  printf '%s\n' "$1" | sed -n "s/^${2}: \\(.*\\)\$/\\1/p" | head -n 1
+}
+
+# Content-aware frontmatter / body extractors. They take the full file
+# content as a string argument so callers can read the file ONCE and pass
+# the result everywhere. Reading once protects against TOCTOU races where
+# a hostile peer could swap the file content on the share between
+# validation and rendering.
+buses::extract_fm() {
+  printf '%s\n' "$1" | awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}'
+}
+buses::extract_body() {
+  printf '%s\n' "$1" | awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}'
 }
 
 # ── cryptographic identity (Ed25519) ────────────────────────────────────────
@@ -320,10 +335,15 @@ buses::ensure_identity_key() {
   chmod 600 "$BUSES_IDENTITY_KEY"
 }
 
+# Portable base64-no-newlines. macOS BSD base64 has no -w flag (default is
+# 60-char line wrap), so `base64 -w0` only works on GNU coreutils. Pipe to
+# `tr -d '\n'` for cross-platform single-line output.
+buses::_b64() { base64 | tr -d '\n'; }
+
 buses::pubkey_b64() {
   # Echo our public key as base64-of-DER. Empty string if not initialised.
   [ -f "$BUSES_IDENTITY_KEY" ] || { printf ''; return 0; }
-  openssl pkey -in "$BUSES_IDENTITY_KEY" -pubout -outform DER 2>/dev/null | base64 -w0
+  openssl pkey -in "$BUSES_IDENTITY_KEY" -pubout -outform DER 2>/dev/null | buses::_b64
 }
 
 buses::fingerprint() {
@@ -333,38 +353,50 @@ buses::fingerprint() {
     | sha256sum | cut -c1-16
 }
 
-buses::canonicalize() {
-  # Build the canonical byte sequence that gets signed/verified. We separate
-  # fields by newlines and put `body` LAST so embedded newlines in body
-  # can't shift earlier fields. The five non-body fields are all controlled
-  # by the sender and don't contain newlines.
-  # Args: id bus from to ts body
-  printf '%s\n%s\n%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" "$5" "$6"
+# Why no buses::canonicalize() function:
+# Bash strings cannot hold NUL bytes (the shell strips them on capture).
+# To get an unambiguous canonical that protects against ANY field value
+# (newlines, separators) shifting the parse, we write the canonical bytes
+# directly to a file with NUL separators, then hand the file to openssl.
+# The header fields are NUL-separated; the body is appended verbatim AFTER
+# a final NUL. Receiver does the identical write, so identical bytes hit
+# the verifier.
+
+buses::_write_canonical() {
+  # $1 = destination file path
+  # $2..$6 = id bus from to ts
+  # $7 = body
+  {
+    printf '%s\0' "$2" "$3" "$4" "$5" "$6"
+    printf '%s'   "$7"
+  } > "$1"
 }
 
-buses::sign() {
-  # $1 = data; echoes base64 signature; nonzero exit on failure.
-  local data="$1"
+buses::sign_canonical() {
+  # Sign (id, bus, from, to, ts, body); echo base64 signature, nonzero on
+  # failure. Bytes never round-trip through a bash variable.
   command -v openssl >/dev/null 2>&1 || return 1
   [ -f "$BUSES_IDENTITY_KEY" ]      || return 1
   local td; td=$(mktemp -d)
-  printf '%s' "$data" > "$td/msg"
+  buses::_write_canonical "$td/msg" "$@"
   local rc=0
   openssl pkeyutl -sign -inkey "$BUSES_IDENTITY_KEY" -rawin -in "$td/msg" \
     > "$td/sig" 2>/dev/null || rc=1
-  if [ $rc -eq 0 ]; then base64 -w0 < "$td/sig"; fi
+  if [ $rc -eq 0 ]; then buses::_b64 < "$td/sig"; fi
   rm -rf "$td"
   return $rc
 }
 
-buses::verify() {
-  # $1 = data, $2 = base64 sig, $3 = base64 pubkey (DER format).
-  # Returns 0 if signature is valid, 1 otherwise.
-  local data="$1" sig_b64="$2" pubkey_b64="$3"
+buses::verify_canonical() {
+  # $1 = base64 sig, $2 = base64 pubkey (DER).
+  # $3..$8 = id bus from to ts body
+  # Returns 0 if signature is valid against the canonical of those fields.
+  local sig_b64="$1" pubkey_b64="$2"
+  shift 2
   [ -n "$sig_b64" ] && [ -n "$pubkey_b64" ] || return 1
   command -v openssl >/dev/null 2>&1 || return 1
   local td; td=$(mktemp -d)
-  printf '%s' "$data"        > "$td/msg"
+  buses::_write_canonical "$td/msg" "$@"
   printf '%s' "$sig_b64"    | base64 -d 2>/dev/null > "$td/sig"
   printf '%s' "$pubkey_b64" | base64 -d 2>/dev/null > "$td/pub.der"
   local rc=0
@@ -383,16 +415,18 @@ BUSES_MSG_MAX_SIZE=102400       # 100 KB total file size
 BUSES_MSG_MAX_BODY=10240        #  10 KB body length
 
 buses::msg_validate() {
-  local f="$1"
+  # $1 = file content (read once by caller, passed in to eliminate TOCTOU
+  #      with a peer swapping the file between validation and rendering)
+  # $2 = file path (only used for size cap, bus-vs-dir cross-check, and
+  #      looking up the sender's member record / per-bus signature policy)
+  local content="$1" f="$2"
   [ -f "$f" ] || return 1
 
-  # Size cap — refuse anything monstrous before parsing.
-  local sz; sz=$(wc -c < "$f" 2>/dev/null || echo 0)
-  [ "$sz" -le "$BUSES_MSG_MAX_SIZE" ] || return 1
+  # Size cap — based on the in-memory content we already have.
+  [ "${#content}" -le "$BUSES_MSG_MAX_SIZE" ] || return 1
 
-  # Pull frontmatter (between the first two `---` lines).
-  local fm
-  fm=$(awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}' "$f") || return 1
+  # Pull frontmatter.
+  local fm; fm=$(buses::extract_fm "$content") || return 1
   [ -n "$fm" ] || return 1
 
   # Required fields.
@@ -403,45 +437,48 @@ buses::msg_validate() {
   m_ts=$(  buses::fm_field "$fm" ts)
   [ -n "$m_id" ] && [ -n "$m_bus" ] && [ -n "$m_from" ] && [ -n "$m_ts" ] || return 1
 
-  # UUID-ish (8-4-4-4-12 lowercase hex). Strict enough to refuse spoofed
-  # names in the `from` field while still cheap.
+  # UUID-ish (8-4-4-4-12 lowercase hex).
   local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
   [[ "$m_id"   =~ $uuid_re ]] || return 1
   [[ "$m_from" =~ $uuid_re ]] || return 1
 
-  # Anti-spoof: the `bus` field MUST match the directory the file is in.
-  # File path looks like .../buses/<bus>/messages/<file>.msg
-  local actual_bus
-  actual_bus=$(basename "$(dirname "$(dirname "$f")")")
+  # Anti-spoof: `bus` field MUST match the directory the file is in.
+  local actual_bus bus_root
+  bus_root=$(dirname "$(dirname "$f")")
+  actual_bus=$(basename "$bus_root")
   [ "$m_bus" = "$actual_bus" ] || return 1
 
-  # Sender membership: from-uuid must currently appear in this bus's members/
-  # directory. Casts forged or stale senders out at the door. (The driver's
-  # own kick-notices satisfy this because driver is always a member.)
-  local members_dir
-  members_dir=$(dirname "$(dirname "$f")")/members
+  # Sender membership.
+  local members_dir="$bus_root/members"
   [ -f "$members_dir/$m_from.json" ] || return 1
 
-  # Body length — extract and cap.
-  local body
-  body=$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$f")
+  # Body length — extract from in-memory content (no re-read).
+  local body; body=$(buses::extract_body "$content")
   [ "${#body}" -le "$BUSES_MSG_MAX_BODY" ] || return 1
 
-  # Cryptographic signature check. We're strict if-and-only-if the sender
-  # has published a public key — that way:
-  #   - new shares (everyone has pubkeys) get full unforgeability,
-  #   - mid-migration shares (some old members without pubkeys yet) keep
-  #     working while everyone upgrades.
-  # If the sender has a pubkey published, a missing OR bad sig is a reject.
-  local pubkey; pubkey=$(jq -r '.public_key // ""' "$members_dir/$m_from.json" 2>/dev/null)
+  # Signature policy:
+  #   - Sender has published a pubkey → sig required and verified.
+  #   - Sender has no pubkey AND bus has require_signatures=false (default)
+  #     → unsigned accepted (back-compat for the migration window).
+  #   - Bus has require_signatures=true → reject unsigned regardless.
+  local manifest="$bus_root/manifest.json"
+  local require_sig=false
+  if [ -f "$manifest" ]; then
+    require_sig=$(jq -r '.require_signatures // false' "$manifest" 2>/dev/null)
+  fi
+
+  local pubkey
+  pubkey=$(jq -r '.public_key // ""' "$members_dir/$m_from.json" 2>/dev/null)
+
+  local m_sig; m_sig=$(buses::fm_field "$fm" sig)
+
   if [ -n "$pubkey" ]; then
-    local m_to m_sig
-    m_to=$( buses::fm_field "$fm" to)
-    m_sig=$(buses::fm_field "$fm" sig)
-    [ -n "$m_sig" ] || return 1  # sender has key → sig required
-    local canonical
-    canonical=$(buses::canonicalize "$m_id" "$m_bus" "$m_from" "$m_to" "$m_ts" "$body")
-    buses::verify "$canonical" "$m_sig" "$pubkey" || return 1
+    [ -n "$m_sig" ] || return 1
+    local m_to; m_to=$(buses::fm_field "$fm" to)
+    buses::verify_canonical "$m_sig" "$pubkey" "$m_id" "$m_bus" "$m_from" "$m_to" "$m_ts" "$body" \
+      || return 1
+  elif [ "$require_sig" = "true" ]; then
+    return 1  # bus requires sigs; sender has no pubkey published → reject
   fi
 
   return 0
@@ -462,6 +499,75 @@ buses::tighten_perms() {
   do
     [ -d "$d" ] && chmod 700 "$d" 2>/dev/null || true
   done
+}
+
+# ── shared write helper ─────────────────────────────────────────────────────
+# Build, sign, and atomically write one .msg file. Used by /buses:send and
+# /buses:kick (which writes its own notice). Centralising means the wire
+# format only changes in ONE place.
+#
+# Args (required):
+#   $1 = bus name
+#   $2 = recipient ("to" field — name, UUID, "all", or comma-separated list)
+#   $3 = body text
+# Args (optional, in order):
+#   $4 = to_id  (single UUID for the recipient, when known)
+#   $5 = kind   (extra frontmatter field, e.g. "kick-notice")
+# Prints on stdout: "<filename> <id>"
+# Returns nonzero on signing failure.
+buses::write_message() {
+  local bus="$1" to="$2" body="$3" to_id="${4:-}" kind="${5:-}"
+  local msgs_dir; msgs_dir=$(buses::bus_messages "$bus")
+  mkdir -p "$msgs_dir"
+
+  local mid;        mid=$(buses::uuid)
+  local short="${mid:0:8}"
+  local ts_iso;     ts_iso=$(buses::now_iso)
+  local ts_compact; ts_compact=$(buses::now_compact)
+  local sid;        sid=$(buses::config_get '.session_id')
+  local name;       name=$(buses::config_get '.session_name')
+  [ -n "$name" ] || name="$sid"
+
+  buses::ensure_identity_key
+  local sig
+  sig=$(buses::sign_canonical "$mid" "$bus" "$sid" "$to" "$ts_iso" "$body") || return 1
+
+  local fname="${ts_compact}__${short}.msg"
+  local final="$msgs_dir/$fname"
+  local tmp="$msgs_dir/.$fname.tmp.$$"
+  {
+    printf -- '---\n'
+    printf 'id: %s\n'        "$mid"
+    printf 'bus: %s\n'       "$bus"
+    printf 'from: %s\n'      "$sid"
+    printf 'from_name: %s\n' "$name"
+    printf 'to: %s\n'        "$to"
+    [ -n "$to_id" ] && printf 'to_id: %s\n' "$to_id"
+    [ -n "$kind" ]  && printf 'kind: %s\n'  "$kind"
+    printf 'ts: %s\n'        "$ts_iso"
+    printf 'sig: %s\n'       "$sig"
+    printf -- '---\n'
+    printf '%s\n' "$body"
+  } > "$tmp"
+  mv "$tmp" "$final"
+  printf '%s %s' "$fname" "$mid"
+}
+
+# ── duration parser (shared by gc + cleanup-stale) ──────────────────────────
+# Parse "<N><unit>" (e.g. "30d", "12h", "90m") into find-friendly flags.
+# Echoes one flag per line; caller does `mapfile -t flags < <(...)`.
+# Returns nonzero for invalid input.
+buses::parse_duration() {
+  local d="$1"
+  local num="${d%[mhd]}"
+  local unit="${d: -1}"
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  case "$unit" in
+    d) printf -- '-mtime\n+%s\n' "$num" ;;
+    h) printf -- '-mmin\n+%s\n'  "$((num * 60))" ;;
+    m) printf -- '-mmin\n+%s\n'  "$num" ;;
+    *) return 1 ;;
+  esac
 }
 
 # ── presence ────────────────────────────────────────────────────────────────

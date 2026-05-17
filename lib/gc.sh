@@ -37,16 +37,10 @@ done
 
 [ -n "$bus" ] || buses::die "usage: gc.sh <bus|all> [--older-than 90d] [--dry-run] [--force]"
 
-# Duration → find flag.
-num="${older_than%[mhd]}"
-unit="${older_than: -1}"
-case "$num" in ''|*[!0-9]*) buses::die "bad --older-than: $older_than" ;; esac
-case "$unit" in
-  d) find_flag=(-mtime "+${num}") ;;
-  h) find_flag=(-mmin  "+$((num * 60))") ;;
-  m) find_flag=(-mmin  "+${num}") ;;
-  *) buses::die "bad --older-than unit '$unit' (use m, h, or d)" ;;
-esac
+# Duration → find flag (shared helper).
+mapfile -t find_flag < <(buses::parse_duration "$older_than") \
+  || buses::die "bad --older-than: $older_than (use Nd / Nh / Nm)"
+[ "${#find_flag[@]}" -eq 2 ] || buses::die "bad --older-than: $older_than"
 
 # Build list of buses to act on.
 buses_root="$(buses::shared_root)/buses"

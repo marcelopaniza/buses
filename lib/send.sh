@@ -43,17 +43,6 @@ if buses::is_locked "$bus" && ! buses::is_driver "$bus"; then
   buses::die "bus '$bus' is locked${reason:+ ($reason)} — only the driver can send"
 fi
 
-msgs_dir=$(buses::bus_messages "$bus")
-mkdir -p "$msgs_dir"
-
-mid=$(buses::uuid)
-short="${mid:0:8}"
-ts_iso=$(buses::now_iso)
-ts_compact=$(buses::now_compact)
-sid=$(buses::config_get '.session_id')
-name=$(buses::config_get '.session_name')
-[ -n "$name" ] || name="$sid"
-
 # Normalise the `to` field: split on commas, trim whitespace, drop empties.
 # Whatever the user typed (a single name, "all", or "loop,felix") is preserved
 # verbatim in the frontmatter — check.sh does the splitting at receive time.
@@ -82,39 +71,16 @@ if [[ "$to_normalised" != *,* ]] && [ "$to_normalised" != "all" ]; then
   fi
 fi
 
-# Sign the message before composing the file. The signature covers the five
-# fields that should be unforgeable: id, bus, from, to, ts — plus the body.
-# from_name and to_id are conveniences and are NOT in the signed envelope
-# (they can change without affecting authenticity).
-buses::ensure_identity_key
-canonical=$(buses::canonicalize "$mid" "$bus" "$sid" "$to_normalised" "$ts_iso" "$body")
-sig=$(buses::sign "$canonical") || buses::die "signing failed (check openssl install)"
+# Delegate file build + sign + atomic write to the shared helper.
+result=$(buses::write_message "$bus" "$to_normalised" "$body" "$to_id") \
+  || buses::die "send failed (check openssl install)"
+fname="${result% *}"
+mid="${result##* }"
 
-# Compose the file: YAML frontmatter + blank line + body.
-fname="${ts_compact}__${short}.msg"
-final="$msgs_dir/$fname"
-tmp="$msgs_dir/.$fname.tmp.$$"
-
-{
-  printf -- '---\n'
-  printf 'id: %s\n'        "$mid"
-  printf 'bus: %s\n'       "$bus"
-  printf 'from: %s\n'      "$sid"
-  printf 'from_name: %s\n' "$name"
-  printf 'to: %s\n'        "$to_normalised"
-  [ -n "$to_id" ] && printf 'to_id: %s\n' "$to_id"
-  printf 'ts: %s\n'        "$ts_iso"
-  printf 'sig: %s\n'       "$sig"
-  printf -- '---\n'
-  printf '%s\n' "$body"
-} > "$tmp"
-
-mv "$tmp" "$final"
+# Refresh our presence (best effort).
 buses::write_member_record "$bus" >/dev/null 2>&1 || true
 
-# Collect any @-mentions in the body so we can echo them as a hint.
-# `|| true` because grep exits 1 when there are no matches, and `set -e` would
-# otherwise kill the script for the (very common) zero-mentions case.
+# Echo back any @-mentions in the body as a usability cue.
 mentions=$(printf '%s' "$body" | { grep -oE '@[A-Za-z0-9._-]+' || true; } \
                                 | sort -u | paste -sd ' ' -)
 printf 'sent: %s/%s  to=%s%s  (id=%s)\n' \

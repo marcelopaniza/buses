@@ -43,6 +43,22 @@ cmd_start() {
   case "$interval" in ''|*[!0-9]*) buses::die "interval must be a positive integer (seconds)" ;; esac
   [ "$interval" -ge 1 ] || buses::die "interval must be >= 1 second"
 
+  # Mkdir-based lock around the start sequence. mkdir is atomic on every
+  # POSIX filesystem we care about, so this serialises concurrent
+  # /buses:watch start calls in the same $BUSES_CONFIG_DIR. Without it,
+  # two terminals starting the watcher within the 0.4s sanity sleep can
+  # both launch a daemon and stomp on the PID file (one daemon stays
+  # orphaned and unreachable by /buses:watch stop).
+  local lock_dir="$state_dir/watcher.lock"
+  local i=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -gt 50 ] && buses::die "couldn't acquire watcher start lock at $lock_dir (stuck? rmdir it manually)"
+    sleep 0.1
+  done
+  # shellcheck disable=SC2064
+  trap "rmdir '$lock_dir' 2>/dev/null || true" EXIT
+
   if is_alive; then
     local running_interval='?'
     [ -f "$interval_file" ] && running_interval=$(cat "$interval_file" 2>/dev/null)
@@ -61,7 +77,6 @@ cmd_start() {
   local pid=$!
   disown 2>/dev/null || true
 
-  # Sanity check: did it actually start?
   sleep 0.4
   if ! kill -0 "$pid" 2>/dev/null; then
     buses::err "watcher exited immediately. Last log lines:"
