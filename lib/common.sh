@@ -91,8 +91,16 @@ buses::state_dir() {
 }
 
 buses::cursor_file() {
-  # Per-bus cursor for "what's the newest message I've already processed".
+  # Per-bus cursor for "what's the newest message I've already processed
+  # and delivered to the model". Advanced by the hook and /buses:read.
   printf '%s/cursor.%s' "$(buses::state_dir)" "$1"
+}
+
+buses::notify_cursor_file() {
+  # Per-bus cursor for "what's the newest message I've already shown the user
+  # via a desktop notification". Advanced by the watcher (and also by the hook,
+  # so we never re-notify after delivery).
+  printf '%s/notified.%s' "$(buses::state_dir)" "$1"
 }
 
 # ── bus validation ──────────────────────────────────────────────────────────
@@ -105,6 +113,71 @@ buses::is_subscribed() {
 buses::valid_name() {
   # Bus and session names: 1-64 chars, [a-zA-Z0-9._-]
   [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+# ── manifest / manager / lock / ban ─────────────────────────────────────────
+buses::manifest_file() { printf '%s/manifest.json' "$(buses::bus_dir "$1")"; }
+
+buses::manifest_get() {
+  # $1 = bus, $2 = jq filter (e.g. '.manager')
+  local mf; mf=$(buses::manifest_file "$1")
+  [ -f "$mf" ] || { printf ''; return 0; }
+  jq -r "${2} // \"\"" "$mf" 2>/dev/null || printf ''
+}
+
+buses::manifest_set() {
+  # $1 = bus, $2 = jq expression, remaining args passed to jq.
+  local bus="$1"; shift
+  local expr="$1"; shift
+  local mf; mf=$(buses::manifest_file "$bus")
+  [ -f "$mf" ] || buses::die "bus '$bus' has no manifest"
+  local tmp="${mf}.tmp.$$"
+  jq "$@" "$expr" "$mf" > "$tmp" && mv "$tmp" "$mf"
+}
+
+buses::is_manager() {
+  # $1 = bus. Returns 0 if our session is the bus manager.
+  local sid mgr
+  sid=$(buses::config_get '.session_id')
+  mgr=$(buses::manifest_get "$1" '.manager')
+  [ -n "$mgr" ] && [ "$mgr" = "$sid" ]
+}
+
+buses::is_locked() {
+  # $1 = bus. Returns 0 if a lock is set.
+  local mf; mf=$(buses::manifest_file "$1")
+  [ -f "$mf" ] || return 1
+  jq -e '.locked != null and .locked != {}' "$mf" >/dev/null 2>&1
+}
+
+buses::lock_reason() {
+  buses::manifest_get "$1" '.locked.reason'
+}
+
+buses::is_banned() {
+  # $1 = bus, $2 = target uuid (defaults to our own sid).
+  local bus="$1"
+  local target="${2:-$(buses::config_get '.session_id')}"
+  local mf; mf=$(buses::manifest_file "$bus")
+  [ -f "$mf" ] || return 1
+  jq -e --arg t "$target" '.banned // [] | index($t) != null' "$mf" >/dev/null 2>&1
+}
+
+buses::resolve_member() {
+  # $1 = bus, $2 = name-or-uuid. Echoes the canonical UUID if found, else empty.
+  local bus="$1" who="$2"
+  local mdir; mdir=$(buses::bus_members "$bus")
+  [ -d "$mdir" ] || { printf ''; return 0; }
+  # Already a uuid that exists as a member?
+  if [ -f "$mdir/$who.json" ]; then printf '%s' "$who"; return 0; fi
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    local id name
+    id=$(jq -r '.id // ""' "$f" 2>/dev/null)
+    name=$(jq -r '.name // ""' "$f" 2>/dev/null)
+    if [ "$name" = "$who" ]; then printf '%s' "$id"; return 0; fi
+  done < <(find "$mdir" -maxdepth 1 -name '*.json' -type f 2>/dev/null)
+  printf ''
 }
 
 # ── presence ────────────────────────────────────────────────────────────────

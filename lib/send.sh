@@ -19,6 +19,17 @@ body="$*"
 buses::valid_name "$bus" || buses::die "invalid bus name: $bus"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist on the shared folder"
 
+# Banlist gate: refuse if our session has been kicked from this bus.
+if buses::is_banned "$bus"; then
+  buses::die "you have been kicked from bus '$bus' — ask the manager to /buses:unkick you"
+fi
+
+# Lock gate: refuse if locked, unless we are the manager.
+if buses::is_locked "$bus" && ! buses::is_manager "$bus"; then
+  reason=$(buses::lock_reason "$bus")
+  buses::die "bus '$bus' is locked${reason:+ ($reason)} — only the manager can send"
+fi
+
 msgs_dir=$(buses::bus_messages "$bus")
 mkdir -p "$msgs_dir"
 

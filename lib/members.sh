@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# /buses:members <bus> — list members of a bus (id, name, host, last_seen).
+# /buses:members <bus> — list members of a bus, marking the manager and any
+# banned UUIDs. Also prints a header line if the bus is locked.
 
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
@@ -10,12 +11,37 @@ bus="${1:-}"
 [ -n "$bus" ] || buses::die "usage: members.sh <bus>"
 buses::bus_exists "$bus" || buses::die "bus '$bus' does not exist"
 
-mdir=$(buses::bus_members "$bus")
-[ -d "$mdir" ] || { printf 'buses: no members in %s yet\n' "$bus"; exit 0; }
+mgr=$(buses::manifest_get "$bus" '.manager')
+mf=$(buses::manifest_file "$bus")
+banned=()
+if [ -f "$mf" ]; then
+  while IFS= read -r b; do
+    [ -n "$b" ] && banned+=("$b")
+  done < <(jq -r '.banned[]? // empty' "$mf" 2>/dev/null)
+fi
 
-printf '%-38s %-20s %-20s %s\n' SESSION_ID NAME HOST LAST_SEEN
-while IFS= read -r f; do
-  [ -f "$f" ] || continue
-  jq -r '"\(.id) \t\(.name // "-") \t\(.host // "-") \t\(.last_seen // "-")"' "$f" \
-    | awk -F'\t' '{printf "%-38s %-20s %-20s %s\n", $1, $2, $3, $4}'
-done < <(find "$mdir" -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort)
+if buses::is_locked "$bus"; then
+  reason=$(buses::lock_reason "$bus")
+  printf '[bus locked%s]\n' "${reason:+ — $reason}"
+fi
+
+mdir=$(buses::bus_members "$bus")
+if [ ! -d "$mdir" ] || [ -z "$(ls -A "$mdir" 2>/dev/null)" ]; then
+  printf 'buses: no active members in %s\n' "$bus"
+else
+  printf '%-38s %-20s %-20s %-22s %s\n' SESSION_ID NAME HOST LAST_SEEN ROLE
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    jq -r '"\(.id) \t\(.name // "-") \t\(.host // "-") \t\(.last_seen // "-")"' "$f" 2>/dev/null \
+      | awk -F'\t' -v mgr="$mgr" '{
+        role = (mgr != "" && $1 == mgr " ") ? "manager" : "member"
+        printf "%-38s %-20s %-20s %-22s %s\n", $1, $2, $3, $4, role
+      }'
+  done < <(find "$mdir" -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort)
+fi
+
+# Banned UUIDs may no longer have a member record — surface them separately.
+if [ "${#banned[@]}" -gt 0 ]; then
+  printf '\nbanned:\n'
+  for b in "${banned[@]}"; do printf '  %s\n' "$b"; done
+fi

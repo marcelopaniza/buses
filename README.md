@@ -67,18 +67,47 @@ The shared path can differ per machine — on Mac it might be `~/Library/CloudSt
 
 ## Commands
 
+### Core
+
 | Command | What it does |
 |---|---|
 | `/buses:init <path>` | Set the shared folder for this machine, generate a session UUID. |
 | `/buses:name <name>` | Set a friendly name (other sessions address you by this or your UUID). |
-| `/buses:create <bus>` | Create a new bus on the shared folder. |
+| `/buses:create <bus>` | Create a new bus on the shared folder. The creator becomes manager. |
 | `/buses:join <bus>` | Subscribe this session to a bus (auto-creates if missing). |
 | `/buses:leave <bus>` | Unsubscribe and remove presence. |
 | `/buses:send <bus> <to> <msg>` | Send to a member name, UUID, or `all`. |
 | `/buses:read` | Manually fetch new messages and advance the cursor. (You don't normally need this — the hook does it.) |
 | `/buses:status` | This session's config, subscriptions, and unread counts. |
 | `/buses:list` | All buses on the shared folder. |
-| `/buses:members <bus>` | Members of a bus. |
+| `/buses:members <bus>` | Members of a bus, with manager + banned annotations. |
+
+### Manager (creator of a bus only)
+
+| Command | What it does |
+|---|---|
+| `/buses:lock <bus> [reason]` | Block all sends except from the manager. Members can still read. |
+| `/buses:unlock <bus>` | Lift the lock. |
+| `/buses:kick <bus> <name-or-uuid> [reason]` | Add to banlist, remove member record, drop a kick-notice for the target. |
+| `/buses:unkick <bus> <name-or-uuid>` | Lift a ban. |
+
+**Manager privileges are cooperative, not enforced.** They depend on every session running this plugin and respecting the manifest. Anyone with raw write access to the shared folder can bypass. Treat lock/kick as protocol, not security.
+
+### Watcher (optional desktop notifications)
+
+| Command | What it does |
+|---|---|
+| `/buses:watch start [interval]` | Start a background polling daemon (default 5s). Detached, survives terminal close. |
+| `/buses:watch stop` | Stop the watcher. |
+| `/buses:watch restart [interval]` | Stop + start. |
+| `/buses:watch status` | Show running state, PID, interval, recent log. |
+| `/buses:watch logs [n]` | Tail the watcher log (default 30 lines). |
+
+The watcher costs **zero tokens** — it's a plain bash polling loop, never invokes Claude. Notifications go through `notify-send` (Linux), `terminal-notifier` or `osascript` (macOS), or `kdialog` (KDE), in that order. Set `BUSES_NOTIFIER_CMD=/path/to/script` to route notifications anywhere (e.g. send to Slack, write to a file, ring a bell).
+
+The watcher and the hook use **independent cursors** — getting a notification does NOT remove the message from the next prompt's inbox. Conversely, when the hook delivers a message to Claude, both cursors advance so the watcher won't fire for it later.
+
+**Why polling, not inotify?** Inotify/fswatch only see writes from the local kernel, so on NFS / Syncthing / Dropbox / iCloud they miss changes made on other machines. Polling works everywhere; the daemon's cost is one `find -newer` per interval per subscribed bus — negligible.
 
 ## Message format
 
@@ -139,12 +168,17 @@ buses/
 ├── commands/                # /buses:* slash commands
 │   ├── init.md  name.md  create.md  join.md  leave.md
 │   ├── send.md  read.md   status.md list.md  members.md
+│   ├── lock.md  unlock.md  kick.md   unkick.md
+│   └── watch.md
 ├── hooks/
 │   ├── hooks.json           # registers UserPromptSubmit
 │   └── check-messages.sh    # silent wrapper around lib/check.sh
 └── lib/                     # bash implementation
-    ├── common.sh            # config + path helpers
-    ├── send.sh check.sh
-    └── init.sh name.sh create.sh join.sh leave.sh
-        list.sh members.sh status.sh
+    ├── common.sh            # config, paths, manifest, manager/ban helpers
+    ├── send.sh   check.sh
+    ├── init.sh   name.sh    create.sh  join.sh    leave.sh
+    ├── list.sh   members.sh status.sh
+    ├── lock.sh   unlock.sh  kick.sh    unkick.sh
+    ├── watch.sh             # /buses:watch dispatcher
+    └── watcher_daemon.sh    # the actual polling loop
 ```

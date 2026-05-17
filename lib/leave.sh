@@ -20,7 +20,8 @@ sid=$(buses::config_get '.session_id')
 members_dir=$(buses::bus_members "$bus")
 [ -f "$members_dir/$sid.json" ] && rm -f "$members_dir/$sid.json"
 
-cursor=$(buses::cursor_file "$bus")
-[ -f "$cursor" ] && rm -f "$cursor"
+for cursor in "$(buses::cursor_file "$bus")" "$(buses::notify_cursor_file "$bus")"; do
+  [ -f "$cursor" ] && rm -f "$cursor"
+done
 
 printf 'buses: left "%s"\n' "$bus"

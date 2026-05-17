@@ -17,16 +17,29 @@ if ! buses::bus_exists "$bus"; then
   "$(dirname "$0")/create.sh" "$bus" >/dev/null
 fi
 
+# Banlist gate: refuse to join if our session has been kicked.
+if buses::is_banned "$bus"; then
+  buses::die "you have been kicked from bus '$bus' — ask the manager to /buses:unkick you"
+fi
+
+# Warn (but do not block) if the bus is locked. You can still receive.
+if buses::is_locked "$bus"; then
+  reason=$(buses::lock_reason "$bus")
+  buses::err "note: bus '$bus' is locked${reason:+ ($reason)} — you can read but cannot send"
+fi
+
 # Add to subscriptions if not already.
 if ! buses::is_subscribed "$bus"; then
   buses::config_set '.buses |= (. + [$b] | unique)' --arg b "$bus"
 fi
 
-# Initialise cursor at "now" (touch existing file or create empty one with now mtime).
+# Initialise BOTH cursors at "now" so neither hook nor watcher floods us
+# with historical messages we never subscribed for.
 mkdir -p "$(buses::state_dir)"
-cursor=$(buses::cursor_file "$bus")
-: > "$cursor"
-touch "$cursor"
+for cursor in "$(buses::cursor_file "$bus")" "$(buses::notify_cursor_file "$bus")"; do
+  : > "$cursor"
+  touch "$cursor"
+done
 
 buses::write_member_record "$bus"
 printf 'buses: joined "%s" (history before now is hidden — use /buses:read --all to see past messages)\n' "$bus"
