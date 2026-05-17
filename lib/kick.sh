@@ -41,6 +41,8 @@ members_dir=$(buses::bus_members "$bus")
 rm -f "$members_dir/$target.json"
 
 # Drop a notice file so the kicked session sees it on their next prompt.
+# Notice must be signed like any other message: the receiver's msg_validate
+# rejects unsigned messages from senders who have published a pubkey.
 ts_iso=$(buses::now_iso)
 ts_compact=$(buses::now_compact)
 mid=$(buses::uuid)
@@ -50,6 +52,14 @@ msgs_dir=$(buses::bus_messages "$bus")
 mkdir -p "$msgs_dir"
 sid=$(buses::config_get '.session_id')
 name=$(buses::config_get '.session_name'); [ -n "$name" ] || name="$sid"
+
+body_text=$(printf 'You have been kicked from bus "%s" by driver %s.%s' \
+  "$bus" "$name" "${reason:+ Reason: $reason}")
+
+buses::ensure_identity_key
+canonical=$(buses::canonicalize "$mid" "$bus" "$sid" "$target" "$ts_iso" "$body_text")
+sig=$(buses::sign "$canonical") || buses::die "signing kick notice failed"
+
 tmp="$msgs_dir/.$fname.tmp.$$"
 {
   printf -- '---\n'
@@ -61,9 +71,9 @@ tmp="$msgs_dir/.$fname.tmp.$$"
   printf 'to_id: %s\n'     "$target"
   printf 'kind: kick-notice\n'
   printf 'ts: %s\n'        "$ts_iso"
+  printf 'sig: %s\n'       "$sig"
   printf -- '---\n'
-  printf 'You have been kicked from bus "%s" by driver %s.%s\n' \
-    "$bus" "$name" "${reason:+ Reason: $reason}"
+  printf '%s\n' "$body_text"
 } > "$tmp"
 mv "$tmp" "$msgs_dir/$fname"
 

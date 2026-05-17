@@ -28,6 +28,7 @@ printf '  shared_path:  %s  ' "$shared"
 [ -d "$shared" ] && printf '[ok]\n' || printf '[MISSING — mount the share]\n'
 printf '  session_id:   %s\n' "$sid"
 printf '  session_name: %s\n' "$name"
+printf '  fingerprint:  %s\n' "$(buses::fingerprint || echo '(no key yet)')"
 printf '  created:      %s\n' "$created"
 printf '\n  subscriptions:\n'
 

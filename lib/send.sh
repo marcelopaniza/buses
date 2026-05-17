@@ -82,6 +82,14 @@ if [[ "$to_normalised" != *,* ]] && [ "$to_normalised" != "all" ]; then
   fi
 fi
 
+# Sign the message before composing the file. The signature covers the five
+# fields that should be unforgeable: id, bus, from, to, ts — plus the body.
+# from_name and to_id are conveniences and are NOT in the signed envelope
+# (they can change without affecting authenticity).
+buses::ensure_identity_key
+canonical=$(buses::canonicalize "$mid" "$bus" "$sid" "$to_normalised" "$ts_iso" "$body")
+sig=$(buses::sign "$canonical") || buses::die "signing failed (check openssl install)"
+
 # Compose the file: YAML frontmatter + blank line + body.
 fname="${ts_compact}__${short}.msg"
 final="$msgs_dir/$fname"
@@ -96,6 +104,7 @@ tmp="$msgs_dir/.$fname.tmp.$$"
   printf 'to: %s\n'        "$to_normalised"
   [ -n "$to_id" ] && printf 'to_id: %s\n' "$to_id"
   printf 'ts: %s\n'        "$ts_iso"
+  printf 'sig: %s\n'       "$sig"
   printf -- '---\n'
   printf '%s\n' "$body"
 } > "$tmp"

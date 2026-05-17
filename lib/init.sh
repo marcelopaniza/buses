@@ -39,6 +39,12 @@ mkdir -p "$shared/buses" || buses::die "cannot create $shared/buses (check the p
 
 sid=$(buses::config_init_file "$shared")
 
+# Generate cryptographic identity (Ed25519). The private key never leaves
+# this machine; the public key is published in member records so peers can
+# verify our signed messages.
+buses::ensure_identity_key
+fp=$(buses::fingerprint)
+
 cc_sid=$(buses::terminal_id)
 cat <<EOF
 buses: initialised
@@ -47,6 +53,7 @@ buses: initialised
   config:      $BUSES_CONFIG_FILE
   shared_path: $shared
   session_id:  $sid
+  fingerprint: ${fp:-(none)}   (sha256/16 of public key)
 
   (identity is scoped to THIS terminal — other Claude Code terminals on this
    machine get their own UUIDs, even in the same project. Override with

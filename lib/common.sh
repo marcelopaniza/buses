@@ -60,6 +60,7 @@ BUSES_CONFIG_DIR_EXPLICIT="${BUSES_CONFIG_DIR:-}"
 BUSES_CONFIG_DIR="$(buses::_resolve_config_dir)"
 BUSES_CONFIG_FILE="$BUSES_CONFIG_DIR/config.json"
 BUSES_LEGACY_CONFIG_FILE="$HOME/.config/buses/config.json"
+BUSES_IDENTITY_KEY="$BUSES_CONFIG_DIR/identity.key"
 
 # ── output ──────────────────────────────────────────────────────────────────
 buses::err() { printf 'buses: %s\n' "$*" >&2; }
@@ -283,6 +284,96 @@ buses::resolve_member() {
   printf ''
 }
 
+# ── frontmatter helpers ─────────────────────────────────────────────────────
+# Extract a frontmatter field's value, preserving every character after the
+# first ": " separator. The previous `awk -F': *'` pattern broke fields whose
+# values contained a colon (most notably ISO timestamps like
+# "2026-05-17T15:46:56Z" — only the part before the first colon was kept,
+# which silently corrupted signed canonicals).
+buses::fm_field() {
+  # $1 = frontmatter text, $2 = field name. Echoes value or empty.
+  printf '%s\n' "$1" | sed -n "s/^${2}: //p" | head -n 1
+}
+
+# ── cryptographic identity (Ed25519) ────────────────────────────────────────
+# Each session keeps a private Ed25519 key in its config dir and publishes
+# the public key in its member record on every bus it joins. Every message
+# the session sends is signed; every message a session receives is verified
+# against the sender's published pubkey IF one is published (migration:
+# sessions that pre-date this feature have no pubkey, so their unsigned
+# messages still flow until they upgrade).
+#
+# Forgery is the actual attack we defend against: someone with raw write
+# access to the shared folder can drop a file claiming to be from any UUID,
+# but without that session's private key the signature won't verify and the
+# message is rejected at the gate (before token spend).
+
+buses::ensure_identity_key() {
+  # Idempotent: generate ed25519 keypair if not present. chmod private 0600.
+  if [ -f "$BUSES_IDENTITY_KEY" ]; then return 0; fi
+  command -v openssl >/dev/null 2>&1 \
+    || buses::die "openssl is required for cryptographic signing — install it (apt install openssl / brew install openssl)"
+  mkdir -p "$BUSES_CONFIG_DIR"
+  if ! openssl genpkey -algorithm Ed25519 -out "$BUSES_IDENTITY_KEY" 2>/dev/null; then
+    buses::die "openssl could not generate an Ed25519 key (your openssl may be too old; need >= 1.1.1)"
+  fi
+  chmod 600 "$BUSES_IDENTITY_KEY"
+}
+
+buses::pubkey_b64() {
+  # Echo our public key as base64-of-DER. Empty string if not initialised.
+  [ -f "$BUSES_IDENTITY_KEY" ] || { printf ''; return 0; }
+  openssl pkey -in "$BUSES_IDENTITY_KEY" -pubout -outform DER 2>/dev/null | base64 -w0
+}
+
+buses::fingerprint() {
+  # Short human-readable fingerprint of OUR pubkey (first 16 hex of sha256).
+  [ -f "$BUSES_IDENTITY_KEY" ] || { printf ''; return 0; }
+  openssl pkey -in "$BUSES_IDENTITY_KEY" -pubout -outform DER 2>/dev/null \
+    | sha256sum | cut -c1-16
+}
+
+buses::canonicalize() {
+  # Build the canonical byte sequence that gets signed/verified. We separate
+  # fields by newlines and put `body` LAST so embedded newlines in body
+  # can't shift earlier fields. The five non-body fields are all controlled
+  # by the sender and don't contain newlines.
+  # Args: id bus from to ts body
+  printf '%s\n%s\n%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" "$5" "$6"
+}
+
+buses::sign() {
+  # $1 = data; echoes base64 signature; nonzero exit on failure.
+  local data="$1"
+  command -v openssl >/dev/null 2>&1 || return 1
+  [ -f "$BUSES_IDENTITY_KEY" ]      || return 1
+  local td; td=$(mktemp -d)
+  printf '%s' "$data" > "$td/msg"
+  local rc=0
+  openssl pkeyutl -sign -inkey "$BUSES_IDENTITY_KEY" -rawin -in "$td/msg" \
+    > "$td/sig" 2>/dev/null || rc=1
+  if [ $rc -eq 0 ]; then base64 -w0 < "$td/sig"; fi
+  rm -rf "$td"
+  return $rc
+}
+
+buses::verify() {
+  # $1 = data, $2 = base64 sig, $3 = base64 pubkey (DER format).
+  # Returns 0 if signature is valid, 1 otherwise.
+  local data="$1" sig_b64="$2" pubkey_b64="$3"
+  [ -n "$sig_b64" ] && [ -n "$pubkey_b64" ] || return 1
+  command -v openssl >/dev/null 2>&1 || return 1
+  local td; td=$(mktemp -d)
+  printf '%s' "$data"        > "$td/msg"
+  printf '%s' "$sig_b64"    | base64 -d 2>/dev/null > "$td/sig"
+  printf '%s' "$pubkey_b64" | base64 -d 2>/dev/null > "$td/pub.der"
+  local rc=0
+  openssl pkeyutl -verify -pubin -inkey "$td/pub.der" -keyform DER \
+    -rawin -in "$td/msg" -sigfile "$td/sig" >/dev/null 2>&1 || rc=1
+  rm -rf "$td"
+  return $rc
+}
+
 # ── message validation ──────────────────────────────────────────────────────
 # Cheap pre-read gate, invoked before any message is delivered to the model
 # or fired as a notification. Returns 0 if the file is well-formed and from
@@ -306,10 +397,10 @@ buses::msg_validate() {
 
   # Required fields.
   local m_id m_bus m_from m_ts
-  m_id=$(  printf '%s\n' "$fm" | awk -F': *' '$1=="id"{print $2; exit}')
-  m_bus=$( printf '%s\n' "$fm" | awk -F': *' '$1=="bus"{print $2; exit}')
-  m_from=$(printf '%s\n' "$fm" | awk -F': *' '$1=="from"{print $2; exit}')
-  m_ts=$(  printf '%s\n' "$fm" | awk -F': *' '$1=="ts"{print $2; exit}')
+  m_id=$(  buses::fm_field "$fm" id)
+  m_bus=$( buses::fm_field "$fm" bus)
+  m_from=$(buses::fm_field "$fm" from)
+  m_ts=$(  buses::fm_field "$fm" ts)
   [ -n "$m_id" ] && [ -n "$m_bus" ] && [ -n "$m_from" ] && [ -n "$m_ts" ] || return 1
 
   # UUID-ish (8-4-4-4-12 lowercase hex). Strict enough to refuse spoofed
@@ -332,9 +423,26 @@ buses::msg_validate() {
   [ -f "$members_dir/$m_from.json" ] || return 1
 
   # Body length — extract and cap.
-  local body_len
-  body_len=$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$f" | wc -c)
-  [ "$body_len" -le "$BUSES_MSG_MAX_BODY" ] || return 1
+  local body
+  body=$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$f")
+  [ "${#body}" -le "$BUSES_MSG_MAX_BODY" ] || return 1
+
+  # Cryptographic signature check. We're strict if-and-only-if the sender
+  # has published a public key — that way:
+  #   - new shares (everyone has pubkeys) get full unforgeability,
+  #   - mid-migration shares (some old members without pubkeys yet) keep
+  #     working while everyone upgrades.
+  # If the sender has a pubkey published, a missing OR bad sig is a reject.
+  local pubkey; pubkey=$(jq -r '.public_key // ""' "$members_dir/$m_from.json" 2>/dev/null)
+  if [ -n "$pubkey" ]; then
+    local m_to m_sig
+    m_to=$( buses::fm_field "$fm" to)
+    m_sig=$(buses::fm_field "$fm" sig)
+    [ -n "$m_sig" ] || return 1  # sender has key → sig required
+    local canonical
+    canonical=$(buses::canonicalize "$m_id" "$m_bus" "$m_from" "$m_to" "$m_ts" "$body")
+    buses::verify "$canonical" "$m_sig" "$pubkey" || return 1
+  fi
 
   return 0
 }
@@ -359,11 +467,14 @@ buses::tighten_perms() {
 # ── presence ────────────────────────────────────────────────────────────────
 buses::write_member_record() {
   # Drop / refresh this session's member.json inside a bus. $1 = bus.
+  # Includes our public key so peers can verify our signed messages.
   local bus="$1"
   local members_dir; members_dir=$(buses::bus_members "$bus")
   local sid; sid=$(buses::config_get '.session_id')
   local name; name=$(buses::config_get '.session_name')
   local host; host=$(hostname 2>/dev/null || echo "unknown")
+  buses::ensure_identity_key
+  local pub; pub=$(buses::pubkey_b64)
   mkdir -p "$members_dir"
   local tmp="$members_dir/.$sid.tmp.$$"
   jq -n \
@@ -371,6 +482,7 @@ buses::write_member_record() {
     --arg name "$name" \
     --arg host "$host" \
     --arg seen "$(buses::now_iso)" \
-    '{id: $id, name: $name, host: $host, last_seen: $seen}' > "$tmp"
+    --arg pub "$pub" \
+    '{id: $id, name: $name, host: $host, last_seen: $seen, public_key: $pub}' > "$tmp"
   mv "$tmp" "$members_dir/$sid.json"
 }

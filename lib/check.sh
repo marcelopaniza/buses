@@ -61,8 +61,8 @@ for bus in "${subscribed[@]}"; do
     # files are silently dropped — never delivered to the model.
     buses::msg_validate "$f" || continue
     fm=$(awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}' "$f")
-    msg_to=$(printf '%s\n'   "$fm" | awk -F': *' '$1=="to"{print $2; exit}')
-    msg_from=$(printf '%s\n' "$fm" | awk -F': *' '$1=="from"{print $2; exit}')
+    msg_to=$(  buses::fm_field "$fm" to)
+    msg_from=$(buses::fm_field "$fm" from)
     [ "$msg_from" = "$sid" ] && continue       # skip self-messages
 
     # Match if any comma-separated token in `to` is one of: "all", our UUID,
@@ -145,7 +145,7 @@ esac
 # Renderers.
 extract_fm()   { awk 'BEGIN{n=0} /^---$/{n++; next} n==1{print} n>=2{exit}' "$1"; }
 extract_body() { awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}'             "$1"; }
-fm_field()     { printf '%s\n' "$1" | awk -v k="$2" -F': *' '$1==k{print $2; exit}'; }
+fm_field()     { buses::fm_field "$1" "$2"; }
 
 if [ "$mode" = "--notify" ]; then
   # One TAB-separated record per message: bus<TAB>from_name<TAB>preview
