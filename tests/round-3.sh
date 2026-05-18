@@ -84,16 +84,73 @@ BUSES_CONFIG_DIR="$custom2" CLAUDE_CODE_SESSION_ID="zzz" HOME="$FAKE_HOME" \
 [ -f "$custom2/config.json" ] || fail "override didn't win over CLAUDE_CODE_SESSION_ID"
 pass "explicit override beats CLAUDE_CODE_SESSION_ID"
 
-banner "6. no CLAUDE_CODE_SESSION_ID, no BUSES_CONFIG_DIR → falls back to per-project key"
+banner "6. no Claude env AND no terminal-pane env → per-project key"
+# Must unset the terminal-pane envs (TMUX_PANE / TERM_SESSION_ID / WT_SESSION /
+# WINDOWID) too, otherwise the resolver short-circuits to terminals/<pane>
+# when this test is run inside tmux or iTerm.
 proj="$TMPDIR/proj-1"
 mkdir -p "$proj"
-( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR
+( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR TMUX_PANE TERM_SESSION_ID WT_SESSION
   cd "$proj"
   export HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config"
   "$PLUGIN/lib/init.sh" "$SHARED" >/dev/null )
 expected_dir="$FAKE_HOME/.config/buses/projects/$(printf '%s' "$proj" | sed 's,/,-,g')"
 [ -f "$expected_dir/config.json" ] || fail "expected per-project fallback at $expected_dir"
-pass "per-project fallback used when no CLAUDE_CODE_SESSION_ID"
+pass "per-project fallback used when no Claude env and no terminal-pane env"
+
+banner "7. TMUX_PANE present, no Claude env → per-pane terminals/ key (sanitised)"
+( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR TERM_SESSION_ID WT_SESSION
+  export TMUX_PANE="%42"
+  export HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config"
+  "$PLUGIN/lib/init.sh" "$SHARED" >/dev/null )
+# '%' is path-unsafe and gets rewritten to '_' by the resolver.
+pane_dir="$FAKE_HOME/.config/buses/terminals/_42"
+[ -f "$pane_dir/config.json" ] \
+  || fail "expected per-pane fallback at $pane_dir; got: $(find $FAKE_HOME/.config/buses/terminals -maxdepth 2 -type f 2>&1)"
+pass "TMUX_PANE drove per-pane fallback to terminals/_42"
+
+banner "8. two distinct TMUX_PANE values → two distinct config dirs"
+( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR TERM_SESSION_ID WT_SESSION
+  export TMUX_PANE="%100"
+  export HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config"
+  "$PLUGIN/lib/init.sh" "$SHARED" >/dev/null )
+( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR TERM_SESSION_ID WT_SESSION
+  export TMUX_PANE="%200"
+  export HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config"
+  "$PLUGIN/lib/init.sh" "$SHARED" >/dev/null )
+sid_p1=$(jq -r '.session_id' "$FAKE_HOME/.config/buses/terminals/_100/config.json")
+sid_p2=$(jq -r '.session_id' "$FAKE_HOME/.config/buses/terminals/_200/config.json")
+[ -n "$sid_p1" ] && [ -n "$sid_p2" ] || fail "missing per-pane config files: _100=$sid_p1 _200=$sid_p2"
+[ "$sid_p1" != "$sid_p2" ] || fail "two TMUX_PANE values should mint distinct UUIDs; both got $sid_p1"
+pass "TMUX_PANE %100 sid=$sid_p1, %200 sid=$sid_p2 (distinct)"
+
+banner "9. traversal-prone TMUX_PANE values are rejected and fall through to per-project key"
+# After tr's allowlist (A-Za-z0-9._-), '.', '..', '-flag', '.hidden', and
+# '....-..' all SURVIVE — the resolver must reject them at a second-layer
+# check or an attacker who controls TMUX_PANE could write outside terminals/
+# (clobbering the legacy config) or quietly share identity by collapsing two
+# distinct values onto the same on-disk dir.
+TRAVERSAL_HOME="$TMPDIR/home9"
+mkdir -p "$TRAVERSAL_HOME/.config"
+proj9="$TMPDIR/proj-9"
+mkdir -p "$proj9"
+expected9="$TRAVERSAL_HOME/.config/buses/projects/$(printf '%s' "$proj9" | sed 's,/,-,g')"
+for bad in '..' '.' '../etc' '-flag' '.hidden' '....-..'; do
+  rm -rf "$TRAVERSAL_HOME/.config/buses"
+  ( unset CLAUDE_CODE_SESSION_ID BUSES_CONFIG_DIR TERM_SESSION_ID WT_SESSION
+    export TMUX_PANE="$bad"
+    cd "$proj9"
+    export HOME="$TRAVERSAL_HOME" XDG_CONFIG_HOME="$TRAVERSAL_HOME/.config"
+    "$PLUGIN/lib/init.sh" "$SHARED" >/dev/null )
+  # Sanitised value — what the on-disk dir name WOULD be if the input passed the rejection.
+  sanitised=$(printf '%s' "$bad" | tr -c 'A-Za-z0-9._-' '_')
+  if [ -f "$TRAVERSAL_HOME/.config/buses/terminals/$sanitised/config.json" ]; then
+    fail "TMUX_PANE='$bad' (→ '$sanitised') was NOT rejected — wrote terminals/$sanitised/"
+  fi
+  # Must have fallen through to the per-project path.
+  [ -f "$expected9/config.json" ] || fail "TMUX_PANE='$bad': expected fallback at $expected9; got: $(find $TRAVERSAL_HOME/.config/buses -maxdepth 4 -type f 2>&1)"
+done
+pass "rejected: .. / . / ../etc / -flag / .hidden / ....-.. (all fell through to per-project key)"
 
 green ""
 green "ALL ROUND-3 TESTS PASSED"

@@ -10,7 +10,7 @@ set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROUNDS=("$@")
-[ "${#ROUNDS[@]}" -eq 0 ] && ROUNDS=(1 2 3 4 5 6 7 8)
+[ "${#ROUNDS[@]}" -eq 0 ] && ROUNDS=(1 2 3 4 5 6 7 8 9)
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }

@@ -2,6 +2,8 @@
 
 **Get your Claude Code windows talking. Across screens, across machines, near-zero tokens.**
 
+*Not just Claude — Codex CLI, Gemini CLI, and local-LLM orchestrators can ride the same buses too. See [Cross-CLI ridership](#cross-cli-ridership-codex-gemini-local-llms-plain-shells).*
+
 You know how you sometimes open three Claude Code terminals — one for the backend, one for the frontend, one to run tests — and end up copy-pasting between them like a hostage negotiator? `buses` makes that go away. Your AI sessions can leave each other notes, broadcast updates, and tag each other into specific threads. Everything flows through a folder they all see, and the messages just *appear* the next time you type into the other window.
 
 ```
@@ -156,6 +158,87 @@ Three delivery paths, three different cost profiles:
    - Wake up Claude every N minutes to actively read messages.
    - Burns one model call per wake. **Don't use this unless the terminal is truly unattended** — the hook covers everything else for free.
 
+## Cross-CLI ridership (Codex, Gemini, local LLMs, plain shells)
+
+The Claude Code plugin gives you the slash commands and the pull-on-prompt hook, but the wire format is just files on a shared folder, the crypto is plain Ed25519 via openssl, and identity is just a UUID. So **anything that can run `bash + jq + openssl`** can ride a bus alongside your Claude terminals — Codex CLI, Gemini CLI, a local Ollama/llama.cpp/LM Studio orchestrator, a cron job, your editor's terminal pane.
+
+### The CLI-agnostic entry point
+
+`bin/buses` is a thin dispatcher over the same `lib/*.sh` scripts the plugin uses. Non-Claude shells call it directly:
+
+```
+bin/buses init <shared-path>
+bin/buses name codex-laptop
+bin/buses join general
+bin/buses send general all "hey from codex"
+bin/buses read                 # default = human-readable text
+bin/buses read --inject        # wrapper-friendly block; see below
+bin/buses read --peek          # preview without advancing the cursor
+bin/buses read --count         # integer count of unread
+bin/buses help                 # full subcommand list
+```
+
+Symlink `bin/buses` somewhere on `$PATH` (or add `bin/` to `$PATH`) and it behaves like any normal CLI tool.
+
+### Identity in non-Claude shells
+
+Claude Code provides `CLAUDE_CODE_SESSION_ID`, so each terminal gets its own identity automatically. Other shells don't. The resolver falls back through, in order:
+
+1. `BUSES_CONFIG_DIR` if you set it explicitly (highest precedence — set this per terminal to be unambiguous)
+2. `CLAUDE_CODE_SESSION_ID` (Claude Code only)
+3. `TMUX_PANE` → `TERM_SESSION_ID` (iTerm) → `WT_SESSION` (Windows Terminal) — first one that's set
+4. Per-project key derived from `$PWD` (last resort — multiple shells in one directory share identity)
+
+So inside tmux, iTerm, or Windows Terminal, two panes get distinct identities for free. We deliberately don't consult `$WINDOWID` — it's the X11 *window* id, shared by every split pane inside one gnome-terminal window, so two splits would silently share identity. If you're in plain xterm with no multiplexer, set `BUSES_CONFIG_DIR=~/.config/buses/sessions/$(uuidgen)` in each shell's rc (or per launch).
+
+### Pull-on-prompt for non-Claude CLIs
+
+Claude Code wires `check.sh --hook` into its `UserPromptSubmit` hook so new messages auto-appear before each turn. Other CLIs need their own pre-turn shim. The primitive to call is:
+
+```
+bin/buses read --inject
+```
+
+It returns a wrapper-friendly text block (ASCII-fenced, no XML tags, no JSON), advances both the delivery and notify cursors, and is silent when there's nothing new. Splice the output into your CLI's system prompt right before invoking the model.
+
+Each invocation embeds a per-run random 16-hex nonce in every boundary:
+
+```
+=== buses inbox 4f1c8b2a9d3e6f01 ===
+You have N new bus message(s) addressed to this session.
+
+[bus=general] alice → bob  @ 2026-05-18T18:00:00Z
+hello
+--- 4f1c8b2a9d3e6f01 ---
+[bus=general] alice → bob  @ 2026-05-18T18:00:05Z
+follow-up
+=== end inbox 4f1c8b2a9d3e6f01 ===
+```
+
+A defensive orchestrator validates that the same nonce appears on the opening fence, every inter-message separator, and the closing fence before trusting the block's structure. A sender cannot guess the nonce, so they cannot forge a fake fence inside their message body to trick you into parsing past the real inbox.
+
+A minimal Python shim for a local LLM:
+
+```python
+import subprocess
+def prefix_with_inbox(system_prompt: str) -> str:
+    inbox = subprocess.run(
+        ["buses", "read", "--inject"],
+        capture_output=True, text=True, timeout=5
+    ).stdout
+    return f"{system_prompt}\n\n{inbox}" if inbox else system_prompt
+```
+
+For Codex CLI's MCP/session lifecycle or Gemini CLI's extension model, wire `buses read --inject` (or `bash /path/to/lib/check.sh --inject`) into whatever pre-turn extension point they expose. Same body-escaping defence the Claude hook gets — a hostile sender can't sneak closing tags into your prompt template.
+
+### What works without changes
+
+Everything about the bus itself — sending, receiving, signing, driving, locking, kicking, transferring driver, requiring signatures, `@`-mentions — works identically across CLIs because it's all `lib/*.sh` over files on disk. A Codex session can be **driver** of a bus full of Claude riders, and vice versa. A local-LLM agent can `@-mention` a Claude session and the mention matches the same way.
+
+### What doesn't
+
+The `/buses:*` slash commands themselves (skill manifests in `commands/`) are Claude Code-specific. They're conveniences around the same `lib/*.sh` that `bin/buses` calls — non-Claude users just use `bin/buses` instead.
+
 ## Identity & security
 
 ### Per-terminal identity (automatic)
@@ -167,6 +250,8 @@ Each Claude Code terminal gets its own identity via the `CLAUDE_CODE_SESSION_ID`
 - `state/` — cursors, watcher PID + log
 
 Two terminals on the same machine → two different identities. Resume the same Claude Code conversation → same identity (the session id persists).
+
+Non-Claude shells (Codex, Gemini, local-LLM orchestrators) get a per-pane identity automatically from `TMUX_PANE` / `TERM_SESSION_ID` / `WT_SESSION`, falling back to a per-`$PWD` key if none of those are set. Full ordering and the explicit `BUSES_CONFIG_DIR` override are documented under [Cross-CLI ridership](#cross-cli-ridership-codex-gemini-local-llms-plain-shells).
 
 ### Cryptographic signatures (Ed25519)
 
@@ -216,7 +301,9 @@ buses/
 ├── .claude-plugin/
 │   ├── plugin.json
 │   └── marketplace.json
-├── commands/                          # /buses:* slash commands
+├── bin/
+│   └── buses                          # CLI-agnostic dispatcher (Codex, Gemini, local LLMs, plain shells)
+├── commands/                          # /buses:* slash commands (Claude Code only)
 │   ├── init.md   name.md    create.md    join.md    leave.md
 │   ├── send.md   read.md    status.md    list.md
 │   ├── members.md  riders.md   start.md   test.md

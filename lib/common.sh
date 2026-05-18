@@ -13,8 +13,13 @@ umask 077
 # Identity is PER-TERMINAL so multiple Claude Code terminals on one machine
 # never share a config. Precedence:
 #   1. $BUSES_CONFIG_DIR if explicitly set    (manual override; highest)
-#   2. <xdg-config>/buses/sessions/$CLAUDE_CODE_SESSION_ID   (per-terminal)
-#   3. <xdg-config>/buses/projects/<flat-PWD>                (manual/scripted)
+#   2. <xdg-config>/buses/sessions/$CLAUDE_CODE_SESSION_ID   (Claude Code)
+#   3. <xdg-config>/buses/terminals/<pane>                   (non-Claude shells:
+#      derives a per-pane key from TMUX_PANE / TERM_SESSION_ID / WT_SESSION —
+#      first one set wins, so two panes in one project never collide)
+#   4. <xdg-config>/buses/projects/<flat-PWD>                (last-resort fallback;
+#      shells in the same dir share identity — set BUSES_CONFIG_DIR per shell
+#      to avoid this)
 #
 # Every Claude Code terminal has a distinct CLAUDE_CODE_SESSION_ID, so each
 # one resolves to its own config dir, its own UUID, its own /buses:name. The
@@ -50,7 +55,33 @@ buses::_resolve_config_dir() {
     printf '%s/sessions/%s' "$base" "$CLAUDE_CODE_SESSION_ID"
     return 0
   fi
-  # No Claude Code env (manual/scripted use): fall back to per-project key.
+  # Non-Claude shells (Codex, Gemini, plain bash, local-LLM orchestrators):
+  # prefer a per-pane id from the terminal multiplexer / terminal app so two
+  # panes in the same project don't collide on one identity. TMUX_PANE wins
+  # over the host terminal's own id because tmux nests inside iTerm/WT and
+  # gives a finer-grained key. We deliberately do NOT consult $WINDOWID —
+  # it's the X11 *window* id, so two split panes inside one gnome-terminal
+  # window share it and would silently share identity. If none of these are
+  # set (plain xterm, no tmux, no WT), fall through to the per-PWD key and
+  # advise setting BUSES_CONFIG_DIR explicitly.
+  local pane="${TMUX_PANE:-${TERM_SESSION_ID:-${WT_SESSION:-}}}"
+  if [ -n "$pane" ]; then
+    local pane_key; pane_key=$(printf '%s' "$pane" | tr -c 'A-Za-z0-9._-' '_')
+    # Sanitise-and-reject: even after `tr` rewrites unsafe chars to `_`, the
+    # allowlist permits `.` and `-`, so an attacker (or a stray dotfile) that
+    # controls TMUX_PANE can still send `..` / `.` / `....-..` / `-flag` /
+    # `.hidden` — which collapse to a parent dir (silently clobbering legacy
+    # configs), hide as dotdirs, or look like CLI flags. Reject those and
+    # fall through to the per-project key.
+    case "$pane_key" in
+      ''|.|..|.*|-*|*..*) pane_key='' ;;
+    esac
+    if [ -n "$pane_key" ]; then
+      printf '%s/terminals/%s' "$base" "$pane_key"
+      return 0
+    fi
+  fi
+  # Last resort: per-project key. Multiple shells in one PWD will share it.
   local key; key=$(buses::_flatten_path "$(buses::project_dir)")
   printf '%s/projects/%s' "$base" "$key"
 }
