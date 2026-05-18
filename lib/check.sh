@@ -132,7 +132,16 @@ advance_cursors_for_bus() {
   local bus="$1" mdir cursor latest
   mdir=$(buses::bus_messages "$bus")
   [ -d "$mdir" ] || return 0
-  latest=$(find "$mdir" -maxdepth 1 -type f -name '*.msg' 2>/dev/null | LC_ALL=C sort | tail -n 1)
+  # Pick the latest message by MTIME, not by filename. Filenames are
+  # `<ts-compact>__<short-id>.msg` with second-resolution timestamps, so two
+  # messages sent within the same second tie on the prefix and sort by the
+  # random short-id — which means "latest by sort" can be the older file. If
+  # we then `touch -r` the cursor to that older mtime, the newer message
+  # looks unread again on the next read, causing infinite re-delivery of the
+  # newer message. `ls -1t` sorts by mtime descending; `head -n 1` gives the
+  # actual newest. Message filenames have no spaces/newlines (we generate
+  # them), so `ls` parsing is safe here.
+  latest=$(ls -1t "$mdir"/*.msg 2>/dev/null | head -n 1)
   for cursor in "$@"; do
     [ "$cursor" = "$bus" ] && continue
     if [ -n "$latest" ]; then

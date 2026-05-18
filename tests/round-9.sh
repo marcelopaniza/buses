@@ -139,6 +139,46 @@ longest=$(awk '{print length}' /tmp/buses-unknown.err | sort -rn | head -1)
 rm -f /tmp/buses-unknown.err
 pass "unknown subcommand → rc=$rc, sanitised + capped stderr"
 
+banner "10. buses-wrap Mode A: {BUSES_INBOX} argv placeholder substitution"
+buses_a send general bob "wrap-mode-a-msg" >/dev/null
+out=$(BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-wrap" echo 'SYS:{BUSES_INBOX}:END')
+echo "$out" | grep -q 'SYS:=== buses inbox' || fail "placeholder substitution did not happen; got: $out"
+echo "$out" | grep -q 'wrap-mode-a-msg'      || fail "body missing after substitution"
+echo "$out" | grep -q ':END$'                || fail "trailing template suffix lost"
+! echo "$out" | grep -q '{BUSES_INBOX}'      || fail "placeholder literal leaked through unsubstituted"
+pass "Mode A: {BUSES_INBOX} replaced in-place, surrounding template preserved"
+
+banner "11. buses-wrap Mode B: stdin pipe → inbox prepended before piped content"
+buses_a send general bob "wrap-mode-b-msg" >/dev/null
+# `cat` echoes whatever lands on its stdin; we should see inbox + blank line + our input.
+out=$(printf 'piped-user-input\n' | BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-wrap" cat)
+# Header is line 1, body somewhere in the middle, footer before piped input.
+first_line=$(echo "$out" | head -n1)
+last_line=$(echo "$out" | tail -n1)
+echo "$first_line" | grep -qE '^=== buses inbox [0-9a-f]+ ===$' || fail "first line should be nonced opening fence; got: $first_line"
+[ "$last_line" = "piped-user-input" ] || fail "last line should be the piped input; got: '$last_line'"
+echo "$out" | grep -q 'wrap-mode-b-msg' || fail "body missing from Mode B output"
+echo "$out" | grep -qE '^=== end inbox [0-9a-f]+ ===$' || fail "missing nonced closing fence in Mode B"
+pass "Mode B: inbox prepended, piped input preserved at end"
+
+banner "12. buses-wrap empty-inbox passthrough: no fences, child runs normally"
+# Cursor was advanced by the Mode B test, and we don't send anything new — so
+# `buses read --inject` is silent and buses-wrap should just exec the child.
+out=$(BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-wrap" echo 'only-child-output')
+[ "$out" = "only-child-output" ] || fail "expected only child output; got: '$out'"
+! echo "$out" | grep -q 'buses inbox' || fail "fence leaked through on empty inbox"
+pass "empty inbox → silent passthrough"
+
+banner "13. buses-wrap with no args prints usage to stderr and exits 2"
+set +e
+"$PLUGIN/bin/buses-wrap" 2>/tmp/buses-wrap-usage.err
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "no-args should exit 2; got $rc"
+grep -q 'usage: buses-wrap' /tmp/buses-wrap-usage.err || fail "missing usage hint; got: $(cat /tmp/buses-wrap-usage.err)"
+rm -f /tmp/buses-wrap-usage.err
+pass "buses-wrap with no args → rc=2 + usage on stderr"
+
 banner "9b. bin/buses read refuses --hook and --notify (reserved modes)"
 set +e
 "$PLUGIN/bin/buses" read --hook   2>/tmp/buses-reserved.err; rc1=$?

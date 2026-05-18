@@ -2,7 +2,7 @@
 
 **Get your Claude Code windows talking. Across screens, across machines, near-zero tokens.**
 
-*Not just Claude — Codex CLI, Gemini CLI, and local-LLM orchestrators can ride the same buses too. See [Cross-CLI ridership](#cross-cli-ridership-codex-gemini-local-llms-plain-shells).*
+*Claude Code gets auto-delivery via the plugin hook. Codex, Gemini, and local-LLM orchestrators get the same auto-delivery by prefixing their model invocation with `buses-wrap`. See [Cross-CLI ridership](#cross-cli-ridership-codex-gemini-local-llms-plain-shells).*
 
 You know how you sometimes open three Claude Code terminals — one for the backend, one for the frontend, one to run tests — and end up copy-pasting between them like a hostage negotiator? `buses` makes that go away. Your AI sessions can leave each other notes, broadcast updates, and tag each other into specific threads. Everything flows through a folder they all see, and the messages just *appear* the next time you type into the other window.
 
@@ -162,6 +162,16 @@ Three delivery paths, three different cost profiles:
 
 The Claude Code plugin gives you the slash commands and the pull-on-prompt hook, but the wire format is just files on a shared folder, the crypto is plain Ed25519 via openssl, and identity is just a UUID. So **anything that can run `bash + jq + openssl`** can ride a bus alongside your Claude terminals — Codex CLI, Gemini CLI, a local Ollama/llama.cpp/LM Studio orchestrator, a cron job, your editor's terminal pane.
 
+### Auto-delivery matrix
+
+| Runtime | Messages auto-appear in the model's context? | How |
+|---|---|---|
+| Claude Code (with this plugin installed) | **Yes** | `UserPromptSubmit` hook fires `check.sh --hook`, which injects unread messages as `additionalContext` before the model sees the next prompt |
+| Codex CLI / Gemini CLI / Ollama / llama.cpp / any other AI CLI | **Yes** — prefix the invocation with `bin/buses-wrap` | Reads `buses read --inject` once, then delivers via argv placeholder, stdin pipe, or stderr heads-up depending on how you launched the model |
+| Your own custom orchestrator (Python, Node, …) | **DIY** — one function call | Shell out to `bin/buses read --inject` from your pre-turn code and splice the output into the system prompt |
+
+If a sender's bus message is supposed to reach a non-Claude AI **and** you don't wire up either `buses-wrap` or a custom call, the message is delivered to the bus and your `bin/buses read` works on demand, but the model itself never sees it. The transport is universal; **auto-delivery into the model is a per-runtime integration**.
+
 ### The CLI-agnostic entry point
 
 `bin/buses` is a thin dispatcher over the same `lib/*.sh` scripts the plugin uses. Non-Claude shells call it directly:
@@ -178,7 +188,7 @@ bin/buses read --count         # integer count of unread
 bin/buses help                 # full subcommand list
 ```
 
-Symlink `bin/buses` somewhere on `$PATH` (or add `bin/` to `$PATH`) and it behaves like any normal CLI tool.
+Symlink `bin/buses` (and `bin/buses-wrap`, see below) somewhere on `$PATH` and they behave like any normal CLI tools.
 
 ### Identity in non-Claude shells
 
@@ -191,17 +201,55 @@ Claude Code provides `CLAUDE_CODE_SESSION_ID`, so each terminal gets its own ide
 
 So inside tmux, iTerm, or Windows Terminal, two panes get distinct identities for free. We deliberately don't consult `$WINDOWID` — it's the X11 *window* id, shared by every split pane inside one gnome-terminal window, so two splits would silently share identity. If you're in plain xterm with no multiplexer, set `BUSES_CONFIG_DIR=~/.config/buses/sessions/$(uuidgen)` in each shell's rc (or per launch).
 
-### Pull-on-prompt for non-Claude CLIs
+### Auto-delivery for non-Claude CLIs (`bin/buses-wrap`)
 
-Claude Code wires `check.sh --hook` into its `UserPromptSubmit` hook so new messages auto-appear before each turn. Other CLIs need their own pre-turn shim. The primitive to call is:
+Claude Code's plugin hook is what makes received messages "just appear" in the model's context. `bin/buses-wrap` does the same job for any other AI CLI — wrap the model invocation, the inbox gets delivered, the model sees it.
+
+```
+buses-wrap <command> [args...]
+```
+
+The wrapper reads `buses read --inject` once, then picks one of three delivery modes based on how you called it:
+
+**Mode A — `{BUSES_INBOX}` placeholder in argv.** Cleanest for tools with a system-prompt flag:
+
+```
+buses-wrap ollama run llama3 --system '{BUSES_INBOX}
+
+you are a helpful assistant'
+```
+
+Every literal `{BUSES_INBOX}` in argv is replaced with the inbox block.
+
+**Mode B — stdin pipe.** For tools that read their prompt from stdin:
+
+```
+echo "any new messages?" | buses-wrap ollama run llama3
+buses-wrap codex < user-query.txt
+```
+
+When stdin is a pipe (not a TTY), the inbox is prepended ahead of the piped content (with a blank-line separator) before reaching the child.
+
+**Mode C — interactive TTY fallback.** When you launch a tool interactively with no stdin pipe and no placeholder, the wrapper can't inject into the model's prompt directly. It prints the inbox to stderr as a heads-up before exec'ing the child so a human at least sees the new messages. Prefer Mode A or B when you can — Mode C delivers to your eyes, not the model.
+
+In all three modes the wrapper is silent on idle (no new messages → zero stderr, zero argv changes, the child runs untouched). Symlink it onto `$PATH` so it sits next to `buses`:
+
+```
+ln -s "$PWD/bin/buses"      ~/.local/bin/buses
+ln -s "$PWD/bin/buses-wrap" ~/.local/bin/buses-wrap
+```
+
+### Calling the inject primitive directly
+
+If `buses-wrap` doesn't fit your invocation pattern — say you're building a custom orchestrator in Python or Node and want to splice the inbox into a prompt template yourself — call the primitive directly:
 
 ```
 bin/buses read --inject
 ```
 
-It returns a wrapper-friendly text block (ASCII-fenced, no XML tags, no JSON), advances both the delivery and notify cursors, and is silent when there's nothing new. Splice the output into your CLI's system prompt right before invoking the model.
+It returns the same text block `buses-wrap` reads internally: ASCII-fenced, no XML tags, no JSON. Advances both the delivery and notify cursors, silent when there's nothing new.
 
-Each invocation embeds a per-run random 16-hex nonce in every boundary:
+Each invocation embeds a per-run random 16-hex nonce on every boundary:
 
 ```
 === buses inbox 4f1c8b2a9d3e6f01 ===
@@ -217,7 +265,7 @@ follow-up
 
 A defensive orchestrator validates that the same nonce appears on the opening fence, every inter-message separator, and the closing fence before trusting the block's structure. A sender cannot guess the nonce, so they cannot forge a fake fence inside their message body to trick you into parsing past the real inbox.
 
-A minimal Python shim for a local LLM:
+A minimal Python shim for a local LLM (functionally the same as `buses-wrap`):
 
 ```python
 import subprocess
@@ -302,7 +350,8 @@ buses/
 │   ├── plugin.json
 │   └── marketplace.json
 ├── bin/
-│   └── buses                          # CLI-agnostic dispatcher (Codex, Gemini, local LLMs, plain shells)
+│   ├── buses                          # CLI-agnostic dispatcher (Codex, Gemini, local LLMs, plain shells)
+│   └── buses-wrap                     # auto-delivery shim: prefix any model invocation to receive inbox in the model's context
 ├── commands/                          # /buses:* slash commands (Claude Code only)
 │   ├── init.md   name.md    create.md    join.md    leave.md
 │   ├── send.md   read.md    status.md    list.md
