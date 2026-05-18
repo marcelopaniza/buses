@@ -196,5 +196,141 @@ rid_out=$(buses_a riders general)
 [ "$mem_out" = "$rid_out" ] || fail "riders should equal members; diff:\n$(diff <(echo "$mem_out") <(echo "$rid_out"))"
 pass "members and riders produce identical output"
 
+banner "14. buses-react: fires the wrapped command when new messages arrive; cursor advances"
+react_out="$TMPDIR/react-out.txt"
+buses_a send general bob "deploy UAT" >/dev/null
+
+# Run the daemon for ~2.5s with `cat > file` standing in for the AI.
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 1 --quiet \
+    bash -c "cat > $react_out" ) &
+pid=$!
+sleep 3.5
+kill -INT $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+
+[ -f "$react_out" ] || fail "buses-react didn't fire — no output file"
+grep -q 'deploy UAT' "$react_out" || fail "message body missing from react fire; got: $(head -10 $react_out)"
+grep -q '\[buses-react directive\]' "$react_out" || fail "default directive prompt missing"
+grep -q '=== buses inbox' "$react_out" || fail "buses-wrap inbox fence missing"
+grep -q 'Destructive' "$react_out" || fail "destructive-ops guidance missing from directive"
+grep -q 'UNTRUSTED USER DATA' "$react_out" || fail "prompt-injection guard missing from directive"
+! grep -q 'CONFIRM' "$react_out" || fail "old CONFIRM magic-word guard still present (security regression — drop it)"
+pass "react fired with inbox + directive (cursor consumed the message)"
+
+banner "15. buses-react: silent when inbox is empty (no re-fire after cursor advanced)"
+rm -f "$react_out"
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 1 --quiet \
+    bash -c "cat > $react_out" ) &
+pid=$!
+sleep 3.5
+kill -INT $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+
+[ ! -f "$react_out" ] || fail "react re-fired on empty inbox (output: $(head -3 $react_out))"
+pass "react stayed silent — cursor advance honored"
+
+banner "16. buses-react: --prompt override replaces the default directive"
+rm -f "$react_out"
+buses_a send general bob "another message" >/dev/null
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 1 --quiet \
+    --prompt "CUSTOM_MARKER_XYZ" \
+    bash -c "cat > $react_out" ) &
+pid=$!
+sleep 3.5
+kill -INT $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+
+[ -f "$react_out" ] || fail "react with --prompt didn't fire"
+grep -q 'CUSTOM_MARKER_XYZ' "$react_out" || fail "--prompt override missing from output"
+! grep -q '\[buses-react directive\]' "$react_out" || fail "default directive leaked despite --prompt"
+pass "--prompt replaced the default directive"
+
+banner "18. buses-react Mode A: {BUSES_INBOX} placeholder carries both inbox AND directive"
+# Regression test for the v0.7.2 code-review finding: in v0.7.1 this combo
+# silently dropped the directive because buses-wrap Mode A exec's the child
+# without forwarding stdin. buses-react now splices the directive next to
+# the placeholder so both ride along in argv.
+buses_a send general bob "mode A regression test" >/dev/null
+react_out_a="$TMPDIR/react-out-modea.txt"
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 1 --quiet \
+    bash -c 'printf "%s" "$1" > "$2"' _ '{BUSES_INBOX}' "$react_out_a" ) &
+pid=$!
+sleep 3.5
+kill -INT $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+
+[ -f "$react_out_a" ] || fail "Mode A test didn't produce output file"
+grep -q 'mode A regression test' "$react_out_a" \
+  || fail "inbox body missing from Mode A output; got: $(head -10 $react_out_a)"
+grep -q '\[buses-react directive\]' "$react_out_a" \
+  || fail "directive missing from Mode A output (regression: directive was silently dropped in v0.7.2-pre)"
+pass "Mode A delivers both inbox AND directive in argv"
+
+banner "19. buses-react: refuses to start when another daemon already holds the lock"
+# Start a daemon in the background, give it a moment to grab the lock.
+react_lock_out="$TMPDIR/react-lock-1.out"
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 5 --quiet \
+    bash -c "cat > $react_lock_out" ) &
+pid1=$!
+sleep 0.5
+
+# Second start with the same config dir MUST fail.
+set +e
+BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 5 --quiet \
+  bash -c "true" 2>/tmp/react-lock-$$.err
+rc2=$?
+set -e
+
+kill -INT $pid1 2>/dev/null || true
+wait $pid1 2>/dev/null || true
+
+[ "$rc2" -ne 0 ] || fail "second daemon should have refused to start (rc=$rc2)"
+grep -q 'another daemon\|lock' /tmp/react-lock-$$.err \
+  || fail "expected lock-related error message; got: $(cat /tmp/react-lock-$$.err)"
+
+# After the first daemon exits, the lock should be released — a third start succeeds.
+sleep 0.3
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 5 --quiet \
+    bash -c "true" ) &
+pid3=$!
+sleep 0.5
+kill -INT $pid3 2>/dev/null || true
+wait $pid3 2>/dev/null || true
+rm -f /tmp/react-lock-$$.err
+pass "lockdir prevents concurrent daemons + is released cleanly on shutdown"
+
+banner "20. buses-react: --prompt override emits a WARNING to stderr"
+warn_err="$TMPDIR/react-warn.err"
+react_warn_out="$TMPDIR/react-warn.out"
+buses_a send general bob "warn-test" >/dev/null
+( BUSES_CONFIG_DIR="$CFG_B" "$PLUGIN/bin/buses-react" --interval 1 \
+    --prompt "OVERRIDE_DIRECTIVE_MARKER" \
+    bash -c "cat > $react_warn_out" 2> "$warn_err" ) &
+pid=$!
+sleep 3.5
+kill -INT $pid 2>/dev/null || true
+wait $pid 2>/dev/null || true
+
+grep -q 'WARNING' "$warn_err" \
+  || fail "expected WARNING about overridden directive; got: $(cat $warn_err)"
+grep -q 'overridden via --prompt' "$warn_err" \
+  || fail "WARNING should mention --prompt source"
+pass "buses-react logs WARNING when --prompt overrides safety directive"
+
+banner "17. buses-react: --help + no-args + bad --interval"
+"$PLUGIN/bin/buses-react" --help 2>&1 | grep -q 'usage: buses-react' || fail "--help missing 'usage: buses-react'"
+set +e
+"$PLUGIN/bin/buses-react" 2>/tmp/react-noargs-$$.err
+rc1=$?
+"$PLUGIN/bin/buses-react" --interval abc bash -c true 2>/tmp/react-badint-$$.err
+rc2=$?
+set -e
+[ "$rc1" -eq 2 ] || fail "no-args should exit 2 (got $rc1)"
+grep -q 'no wrapped command' /tmp/react-noargs-$$.err || fail "no-args missing usage hint"
+[ "$rc2" -eq 2 ] || fail "bad --interval should exit 2 (got $rc2)"
+grep -q 'must be a positive integer' /tmp/react-badint-$$.err || fail "bad --interval missing validation message"
+rm -f /tmp/react-noargs-$$.err /tmp/react-badint-$$.err
+pass "react --help + no-args + bad --interval all behave"
+
 green ""
 green "ALL ROUND-9 TESTS PASSED"

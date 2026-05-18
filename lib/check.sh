@@ -255,7 +255,11 @@ if [ "$mode" = "--inject" ]; then
   if [ -z "$inject_nonce" ] && [ -r /dev/urandom ]; then
     inject_nonce=$(LC_ALL=C tr -dc '0-9a-f' </dev/urandom 2>/dev/null | head -c 16)
   fi
-  [ -n "$inject_nonce" ] || inject_nonce="$$$(date +%s)"
+  # Refuse rather than fall back to a guessable PID+epoch nonce. A
+  # predictable nonce lets a sender forge a fake closing fence in their
+  # body and trick a wrapper-orchestrator into parsing past the real
+  # inbox. If we genuinely have no entropy source, drop the message.
+  [ -n "$inject_nonce" ] || buses::die "--inject: no entropy source (openssl and /dev/urandom both unavailable); refusing to emit a guessable fence nonce"
   printf '=== buses inbox %s ===\n' "$inject_nonce"
   printf 'You have %d new bus message(s) addressed to this session.\n\n' "$total"
   for i in "${!match_buses[@]}"; do
