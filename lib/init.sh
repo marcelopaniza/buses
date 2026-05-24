@@ -8,7 +8,7 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 
 # Re-split: see comment in other lib scripts.
-[ "$#" -le 1 ] && set -- ${1-}
+[ "$#" -le 1 ] && { read -ra __buses_args <<<"${1-}"; set -- "${__buses_args[@]}"; unset __buses_args; }
 
 shared="${1:-}"
 force="${2:-}"

@@ -5,7 +5,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/gc.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/gc.sh" "$ARGUMENTS"
+"${CLAUDE_PLUGIN_ROOT}/lib/gc.sh" "$(cat <<'BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a'
+$ARGUMENTS
+BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a
+)"
 ```
 
 Echo what was removed (or what would be removed in --dry-run). If many buses were skipped because the user wasn't driver, mention that they can pass --force to GC them anyway (cooperatively — same caveats as kick/lock).

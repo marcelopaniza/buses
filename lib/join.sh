@@ -13,7 +13,7 @@ buses::config_require
 # against shell metacharacters in user input. Re-split it into positionals
 # here (whitespace-only; no shell interpretation). When tests call the
 # script directly with already-split args, $# > 1 and we leave them alone.
-[ "$#" -le 1 ] && set -- ${1-}
+[ "$#" -le 1 ] && { read -ra __buses_args <<<"${1-}"; set -- "${__buses_args[@]}"; unset __buses_args; }
 
 bus="${1:-}"
 [ -n "$bus" ] || buses::die "usage: join.sh <bus>"

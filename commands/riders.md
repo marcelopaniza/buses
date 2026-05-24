@@ -5,7 +5,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/members.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/members.sh" "$ARGUMENTS"
+"${CLAUDE_PLUGIN_ROOT}/lib/members.sh" "$(cat <<'BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a'
+$ARGUMENTS
+BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a
+)"
 ```
 
 Echo the table. The driver is marked in the ROLE column; everyone else is a rider.

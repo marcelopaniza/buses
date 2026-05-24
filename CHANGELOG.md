@@ -2,6 +2,36 @@
 
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.3] — 2026-05-24
+
+Security release. After parallel code-review (4 Sonnet agents + Haiku scoring) and adversarial security-review (1 Opus agent) passes — both flagged real, in-the-wild vulnerabilities; ship was blocked until everything was fixed.
+
+### Security
+
+- **Slash-command injection in `/buses:send` (RCE on sender's machine).** Claude Code substitutes `$ARGUMENTS` into the `.md` template's bash block BEFORE bash parses the result, so a message body like `hi $(rm -rf ~)` previously executed on the sender's machine while the message was being sent. Confirmed in the wild — game2 session on atlas was bitten 2026-05-24 (a backtick in the body expanded `ls /mnt/data/game2/` into the literal stored message). **Fix:** route `$ARGUMENTS` through a quoted-delimiter heredoc piped to `lib/send.sh --from-stdin`. Single-quoted heredocs suppress all bash expansion; the body lands verbatim at the lib script with no shell evaluation. Regression test: `tests/round-10.sh`. **The CLI form (`bin/buses send …`) was always safe** — only the `/buses:send` slash-command path was affected.
+- **Widened to ALL `commands/*.md` files** (17 more files, per Opus block verdict). Same `$ARGUMENTS`-in-double-quotes pattern existed in `lock.md`, `kick.md`, `name.md`, `join.md`, `leave.md`, `create.md`, `transfer-driver.md`, `require-signatures.md`, `gc.md`, `cleanup-stale.md`, `members.md`, `riders.md`, `unlock.md`, `unkick.md`, `watch.md`, `init.md`, `test.md`. Two patterns applied: Pattern B (heredoc → `--from-stdin`) for the freeform-text commands `lock` and `kick`; Pattern A (heredoc-captured single quoted arg) for the rest. `commands/test.md` uses an array form to preserve word-splitting of round numbers without glob expansion. Regression test (lock representative): `tests/round-13.sh`.
+- **Hook stash symlink overwrite (arbitrary file write, same-UID peer).** v0.7.3-pre's `hooks/check-messages.sh` added a fast-path mtime cache that wrote to a fixed-name `hook-mtime-stash.tmp` without `O_EXCL`/`O_NOFOLLOW`. A same-UID peer (the plugin's explicit threat model — compromise of one session ≠ compromise of host shell) could plant the tmp path as a symlink to any victim-writable file; the next hook fire followed the symlink and truncated+overwrote the target with stash bytes. Opus reproduced live. **Fix:** create the tmp file via `mktemp "$state_dir/hook-mtime-stash.XXXXXX"` (atomic `O_CREAT|O_EXCL`). Defensive add: refuse to read or write through `$state_dir` if it is itself a symlink. Regression test: `tests/round-11.sh`.
+- **Hook stash censorship (remote-controllable denial of delivery).** Same fast-path iterated over the cached bus list with `all_match=1` set before the loop, so an empty `stash_buses` array yielded vacuous `all_match=1` → silent exit-0 → all messages dropped. A peer could write a curated stash (omitting `b=` lines for a specific bus) to censor just that bus, persistently, until the victim modified `config.json`. Opus reproduced live. **Fix:** in the fast path, cross-check the cached bus list against `jq .buses` from the live config; mismatch (including all-empty stash with non-empty config) forces fall-through to the slow path. One extra `jq` call on the fast path; idle cost rises from ~9 ms to ~25 ms but still ~3× faster than the full slow path. Regression test: `tests/round-12.sh`.
+- **Hook stash refresh self-check.** Even with `mktemp`, a non-zero exit from the `sed | tail | while` pipeline under `pipefail` could land a stash file with `cfg=`/`shared=` lines but zero `b=` lines, which the fast path would have read as "nothing to deliver" and silently dropped all real messages until the next config change. Now we `grep -q '^b='` the tmp stash before atomic `mv` — if no buses were captured, the partial stash is discarded.
+- **Lib scripts: word-split without glob expansion.** All 16 `lib/*.sh` scripts had a `[ "$#" -le 1 ] && set -- ${1-}` fallback that re-split a single positional via unquoted `${1-}` — which performs both word-splitting (desired) and pathname expansion (not desired, since user input could contain `*` etc.). Replaced uniformly with `[ "$#" -le 1 ] && { read -ra __buses_args <<<"${1-}"; set -- "${__buses_args[@]}"; unset __buses_args; }` which word-splits without globbing.
+
+### Added
+
+- `hooks/check-messages.sh` UserPromptSubmit fast-path mtime stash. Idle hook cost drops from ~73 ms (full `check.sh` + jq + find + stat per bus) to ~25 ms (stat config + one jq + stat per bus messages dir) when nothing has changed since the last fire. Authentic-stash-only — see Security above for the cross-check that makes the optimisation safe under adversarial conditions.
+- `tests/round-10.sh` — regression for the `/buses:send` slash-command injection.
+- `tests/round-11.sh` — regression for the hook stash symlink-overwrite (Opus N1).
+- `tests/round-12.sh` — regression for the hook stash censorship (Opus N2).
+- `tests/round-13.sh` — regression for the `/buses:lock` heredoc widening (representative of all 17 widened commands).
+- `tests/run-all.sh` default round range extended to 1..13.
+- `lib/lock.sh`, `lib/kick.sh`: `--from-stdin` mode mirroring `lib/send.sh` (Pattern B consumers of the heredoc).
+
+### Known limitations
+
+- **Heredoc delimiter collision.** The fix relies on a fixed delimiter `BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a` (public in the repo). A message body containing that exact string on its own line will close the heredoc early; the trailing text becomes shell. Accidental collision is astronomically unlikely (32-hex-char suffix); an adversary with read access to the repo can trigger it deterministically. There is no plugin-side fix — Claude Code's `$ARGUMENTS` is text-substituted into the template at render time, so per-invocation delimiter randomisation is not possible without changes to Claude Code itself. Treat the delimiter as a magic constant that messages should not contain.
+- **NUL bytes in `--from-stdin` bodies are stripped.** `lib/send.sh`'s payload-slurp uses bash command substitution which silently drops NUL bytes (bash limitation). Heredocs from the slash command don't contain NULs; this only affects callers piping binary content into `--from-stdin` directly. Document and accept.
+
+[0.7.3]: ../../releases/tag/v0.7.3
+
 ## [0.7.2] — 2026-05-18
 
 After parallel code-review (4 Sonnet agents) and adversarial security-review (1 Opus agent) passes.

@@ -5,7 +5,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/transfer-driver.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/transfer-driver.sh" "$ARGUMENTS"
+"${CLAUDE_PLUGIN_ROOT}/lib/transfer-driver.sh" "$(cat <<'BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a'
+$ARGUMENTS
+BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a
+)"
 ```
 
 Confirm in one line: who's the new driver. If --force was used, mention briefly that the bus has been taken over (a one-off action, not a hostile one — the share is cooperative).

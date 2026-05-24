@@ -15,11 +15,50 @@ source "$(cd "$(dirname "$0")" && pwd)/common.sh"
 buses::require jq
 buses::config_require
 
-# The matching .md command quotes "$ARGUMENTS" as a single arg for safety
-# against shell metacharacters in user input. Re-split it into positionals
-# here (whitespace-only; no shell interpretation). When tests call the
-# script directly with already-split args, $# > 1 and we leave them alone.
-[ "$#" -le 1 ] && set -- ${1-}
+# --from-stdin mode: the /buses:send slash command pipes $ARGUMENTS via a
+# heredoc with a single-quoted delimiter, so the host shell does NOT expand
+# $(...) or backticks inside the user's message body. We parse the payload
+# here, where no further bash evaluation can occur, then fall through to the
+# regular flow with bus/to/body set as positional args.
+#
+# Why this matters: the previous slash-command shape was
+#   "${CLAUDE_PLUGIN_ROOT}/lib/send.sh" "$ARGUMENTS"
+# Claude Code substitutes $ARGUMENTS into the .md template BEFORE bash
+# parses it, so the resulting bash source had the body sitting inside
+# double quotes — where command substitution and backticks still fire. A
+# body like `hi $(touch /tmp/x)` therefore executed the touch on the
+# SENDER's machine while the message was being sent. See tests/round-10.sh.
+if [ "${1:-}" = "--from-stdin" ]; then
+  shift
+  # Slurp stdin preserving exact bytes (the `printf x; ${var%x}` dance
+  # avoids the trailing-newline strip that command substitution does).
+  payload=$(cat; printf x)
+  payload=${payload%x}
+  # The closing heredoc line adds exactly one trailing newline; remove it
+  # so the body is byte-equal to what the user typed.
+  payload=${payload%$'\n'}
+
+  # bus + to live on the first physical line; body is the rest of that
+  # line plus every subsequent line. read -r preserves backslashes.
+  if [[ "$payload" == *$'\n'* ]]; then
+    first_line=${payload%%$'\n'*}
+    rest_lines=${payload#*$'\n'}
+  else
+    first_line="$payload"
+    rest_lines=""
+  fi
+  read -r bus to body_head <<< "$first_line"
+  body="${body_head:-}"
+  [ -n "$rest_lines" ] && body="${body}"$'\n'"$rest_lines"
+
+  set -- "${bus:-}" "${to:-}" "${body:-}"
+fi
+
+# Legacy single-string callers (older slash-command shape, ad-hoc shell
+# invocations): collapse a single positional arg into whitespace-split
+# tokens. Direct CLI / bin/buses callers (and the --from-stdin branch
+# above) all arrive with $# > 1, so this is a no-op for them.
+[ "$#" -le 1 ] && { read -ra __buses_args <<<"${1-}"; set -- "${__buses_args[@]}"; unset __buses_args; }
 
 bus="${1:-}"; shift || true
 to="${1:-}";  shift || true

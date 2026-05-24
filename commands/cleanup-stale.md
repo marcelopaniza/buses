@@ -5,7 +5,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/cleanup-stale.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/cleanup-stale.sh" "$ARGUMENTS"
+"${CLAUDE_PLUGIN_ROOT}/lib/cleanup-stale.sh" "$(cat <<'BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a'
+$ARGUMENTS
+BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a
+)"
 ```
 
 Echo what was removed (or what would be removed in --dry-run). If the driver's own record was skipped, mention it once.

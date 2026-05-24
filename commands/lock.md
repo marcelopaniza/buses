@@ -5,7 +5,9 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/lock.sh:*)"]
 ---
 
 ```!
-"${CLAUDE_PLUGIN_ROOT}/lib/lock.sh" "$ARGUMENTS"
+"${CLAUDE_PLUGIN_ROOT}/lib/lock.sh" --from-stdin <<'BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a'
+$ARGUMENTS
+BUSES_END_PAYLOAD_3f5a8c2d1b9e7f0a
 ```
 
 Confirm the lock in one line. If the command failed (e.g. not the manager), surface the error verbatim.
