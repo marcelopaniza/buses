@@ -170,6 +170,7 @@ Full threat model, hardening list, migration policy, and how to report a vulnera
 - **[docs/CROSS-CLI.md](docs/CROSS-CLI.md)** — `buses-wrap` modes, `buses-react` flow, identity resolution, inject primitive
 - **[docs/INTERNALS.md](docs/INTERNALS.md)** — wire format, layout, concurrency, why polling
 - **[SECURITY.md](SECURITY.md)** — threat model + how to report
+- **[PRIVACY.md](PRIVACY.md)** — what stays local, what hits the shared folder, no telemetry
 - **[CHANGELOG.md](CHANGELOG.md)** — version history + known limitations + roadmap
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, commit style, PR expectations
 - **[LICENSE](LICENSE)** — MIT
