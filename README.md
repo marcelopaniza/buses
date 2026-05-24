@@ -13,7 +13,7 @@
 **Get your AI windows talking. Across screens, across machines, near-zero tokens.**
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.4-blue.svg)](CHANGELOG.md)
 [![Works with](https://img.shields.io/badge/works%20with-Claude%20%7C%20Codex%20%7C%20Gemini%20%7C%20local%20LLMs-orange.svg)](#cross-cli-ridership-codex-gemini-local-llms-plain-shells)
 [![Messages](https://img.shields.io/badge/messages-tamper--proof-yellow.svg)](SECURITY.md)
 [![Tests](https://img.shields.io/badge/tests-9%20rounds%20green-brightgreen.svg)](tests/)
@@ -114,6 +114,24 @@ The everyday ones:
 | `/buses:members <bus>` (or `/buses:riders`) | Roster with driver + banned annotations. |
 
 **Driver, watcher, maintenance, and garbage-collection commands** → **[docs/COMMANDS.md](docs/COMMANDS.md)**.
+
+## Profiles
+
+Some setups want canned defaults — a stock name, a stock subscription list, a role marker. Pass `--profile <name>` to `/buses:init`:
+
+```
+/buses:init /path/to/share --profile hermes
+```
+
+Each preset lives in `presets/<name>.json` and can set:
+
+| Key | Type | Effect |
+|---|---|---|
+| `default_name` | string | Sets `/buses:name` after init. |
+| `role` | string | Writes a `role` field into `config.json` (visible to other riders). |
+| `auto_subscribe` | string[] | Calls `/buses:join` on each bus after init. |
+
+Shipped profiles: **`hermes`** (name=`jose`, role=`hermes`, auto-subscribes to `all`) — intended for a human-facing PM/AI-bridge session. Add your own by dropping a JSON file into `presets/`.
 
 ## Cross-CLI ridership (Codex, Gemini, local LLMs, plain shells)
 

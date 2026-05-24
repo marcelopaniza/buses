@@ -1,6 +1,6 @@
 ---
 description: "Initialise buses on this machine: set the shared folder path and generate a session UUID."
-argument-hint: "<shared-folder-path> [--force]"
+argument-hint: "<shared-folder-path> [--force] [--profile <name>]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/init.sh:*)"]
 ---
 

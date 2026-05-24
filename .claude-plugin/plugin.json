@@ -1,6 +1,6 @@
 {
   "name": "buses",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Lightweight cross-terminal messaging for Claude Code. Multiple sessions on one or many machines share a folder; messages are picked up by a hook on the next user prompt \u2014 zero idle polling, zero token cost when no traffic.",
   "author": {
     "name": "Marcelo Paniza"

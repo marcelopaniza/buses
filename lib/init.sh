@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# /buses:init <shared-path> — set the shared folder for this machine/session and
-# generate a session UUID. Safe to re-run: refuses to clobber an existing config
-# unless --force is passed.
+# /buses:init <shared-path> [--force] [--profile <name>] — set the shared
+# folder for this machine/session and generate a session UUID. Safe to re-run:
+# refuses to clobber an existing config unless --force is passed.
+#
+# --profile <name> reads presets/<name>.json from the plugin root and applies
+# its overlays after standard init: default_name, role, auto_subscribe.
 
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/common.sh"
@@ -11,9 +14,45 @@ buses::require jq
 [ "$#" -le 1 ] && { read -ra __buses_args <<<"${1-}"; set -- "${__buses_args[@]}"; unset __buses_args; }
 
 shared="${1:-}"
-force="${2:-}"
+shift || true
 
-[ -n "$shared" ] || buses::die "usage: init.sh <shared-path> [--force]"
+force=""
+profile=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force)
+      force="--force"
+      shift
+      ;;
+    --profile)
+      profile="${2:-}"
+      [ -n "$profile" ] || buses::die "--profile requires a name (e.g. --profile hermes)"
+      shift 2
+      ;;
+    *)
+      buses::die "unknown argument: $1 (usage: init.sh <shared-path> [--force] [--profile <name>])"
+      ;;
+  esac
+done
+
+[ -n "$shared" ] || buses::die "usage: init.sh <shared-path> [--force] [--profile <name>]"
+
+# Validate profile name early (before touching any state). Reject path-
+# traversal, dotfiles, absolute paths, and anything outside [A-Za-z0-9_-].
+if [ -n "$profile" ]; then
+  case "$profile" in
+    *'/'*|*'.'*|'-'*|'')
+      buses::die "invalid profile name: '$profile' (must match [A-Za-z0-9_-]+, no dots, slashes, or leading dash)"
+      ;;
+  esac
+  if ! printf '%s' "$profile" | LC_ALL=C grep -qE '^[A-Za-z0-9_-]+$'; then
+    buses::die "invalid profile name: '$profile' (must match [A-Za-z0-9_-]+)"
+  fi
+  plugin_root="$(cd "$(dirname "$0")/.." && pwd)"
+  preset_file="$plugin_root/presets/$profile.json"
+  [ -f "$preset_file" ] || buses::die "no such profile: '$profile' (looked at $preset_file)"
+  jq empty "$preset_file" >/dev/null 2>&1 || buses::die "preset file is not valid JSON: $preset_file"
+fi
 
 # Expand ~ if present.
 case "$shared" in
@@ -45,6 +84,43 @@ sid=$(buses::config_init_file "$shared")
 buses::ensure_identity_key
 fp=$(buses::fingerprint)
 
+# Apply profile overlays (name, role, auto-subscribe). Order matters: set the
+# session name BEFORE auto-subscribing so member records written by join.sh
+# carry the preset name from the first publish.
+profile_summary=""
+if [ -n "$profile" ]; then
+  lib_dir="$(cd "$(dirname "$0")" && pwd)"
+  default_name=$(jq -r '.default_name // ""'        "$preset_file")
+  role=$(jq -r        '.role         // ""'        "$preset_file")
+  auto_subscribe=$(jq -r '.auto_subscribe // [] | .[]' "$preset_file" 2>/dev/null || true)
+
+  if [ -n "$default_name" ]; then
+    "$lib_dir/name.sh" "$default_name" >/dev/null
+  fi
+
+  if [ -n "$role" ]; then
+    tmp_cfg=$(mktemp "${BUSES_CONFIG_FILE}.XXXXXX")
+    jq --arg r "$role" '.role = $r' "$BUSES_CONFIG_FILE" > "$tmp_cfg" \
+      && mv "$tmp_cfg" "$BUSES_CONFIG_FILE" \
+      || { rm -f "$tmp_cfg"; buses::die "failed to set role from preset"; }
+  fi
+
+  joined_count=0
+  if [ -n "$auto_subscribe" ]; then
+    while IFS= read -r bus; do
+      [ -n "$bus" ] || continue
+      "$lib_dir/join.sh" "$bus" >/dev/null 2>&1 \
+        && joined_count=$((joined_count + 1)) || true
+    done <<< "$auto_subscribe"
+  fi
+
+  profile_summary=$(printf '  profile:     %s%s%s%s' \
+    "$profile" \
+    "${default_name:+  (name=$default_name)}" \
+    "${role:+  (role=$role)}" \
+    "$([ "$joined_count" -gt 0 ] && printf '  (auto-joined %d bus)' "$joined_count")")
+fi
+
 cc_sid=$(buses::terminal_id)
 cat <<EOF
 buses: initialised
@@ -53,7 +129,8 @@ buses: initialised
   config:      $BUSES_CONFIG_FILE
   shared_path: $shared
   session_id:  $sid
-  fingerprint: ${fp:-(none)}   (sha256/16 of public key)
+  fingerprint: ${fp:-(none)}   (sha256/16 of public key)${profile_summary:+
+$profile_summary}
 
   (identity is scoped to THIS terminal — other Claude Code terminals on this
    machine get their own UUIDs, even in the same project. Override with

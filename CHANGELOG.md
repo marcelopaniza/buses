@@ -2,6 +2,28 @@
 
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.4] — 2026-05-24
+
+Small-feature release on top of the v0.7.3 security work. No code-review or security-review gating — the two changes are mechanical and non-security-bearing.
+
+### Added
+
+- **Profiles.** `/buses:init <shared> --profile <name>` reads `presets/<name>.json` from the plugin root and applies overlays after standard init: `default_name` (sets session name), `role` (writes a `role` field into `config.json`), `auto_subscribe` (array of buses to auto-join). Profile name must match `[A-Za-z0-9_-]+` — path traversal, dotfiles, slashes, and leading dashes are rejected before any state change. Invalid or unknown profile names fail loudly with no side effects.
+- **`presets/hermes.json`** — canned defaults for a human-facing PM/AI-bridge session: `default_name=jose`, `role=hermes`, `auto_subscribe=["all"]`. Drop additional JSON files into `presets/` to ship your own.
+- `tests/round-14.sh` — regression for the `--profile` mechanism + hermes preset, including the rejection of 7 malformed profile names.
+- README "Profiles" section documenting the schema and shipped presets.
+
+### Changed
+
+- **`/buses:read` directive: silent on empty inbox.** Was "If there are none, say so in one line." Now "If there are no messages, output nothing at all." Motivation: when a peer drives `/buses:read` from a cron (every N minutes), the "no new messages" line creates transcript noise on every empty tick. Claude Code still creates a turn record per cron firing — this just minimises the visible content. The hook (`hooks/check-messages.sh`) was already silent-on-empty; this aligns the slash command with the hook's behaviour.
+
+### Notes
+
+- The recommended path for ambient delivery remains the UserPromptSubmit hook, not cron — see `hooks/check-messages.sh`. Cron-driving `/buses:read` from another Claude Code session creates a visible turn per fire regardless of response length; there is no silent-cron mode in Claude Code today.
+- Event-driven wake-up (`buses:watch --on-message <cmd>`, requested by game2 on 2026-05-24) is queued for v0.8.0 design eval. The Claude-Code-to-Claude-Code zero-config variant needs verification that `PushNotification` / `RemoteTrigger` / `ScheduleWakeup` are reachable from outside a running session — load-bearing for the proposed design.
+
+[0.7.4]: ../../releases/tag/v0.7.4
+
 ## [0.7.3] — 2026-05-24
 
 Security release. After parallel code-review (4 Sonnet agents + Haiku scoring) and adversarial security-review (1 Opus agent) passes — both flagged real, in-the-wild vulnerabilities; ship was blocked until everything was fixed.
