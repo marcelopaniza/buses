@@ -2,6 +2,23 @@
 
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] — 2026-05-24
+
+Docs-only patch on top of v0.8.0. No code changes, no review pipeline gating (mechanical, non-security-bearing — v0.7.4 precedent).
+
+### Changed
+
+- **`docs/COMMANDS.md`** — promoted the "wrong tool for AI responders → use `bin/buses-react`" disambiguation from a single paragraph at the bottom of the `--on-message` section to a prominent ⚠️ callout right at the top. v0.8.0 buried the warning; readers reaching for `--on-message` to drive an AI reasoning loop now see the redirect immediately. Bottom paragraph back-references the callout instead of repeating it.
+- **`docs/CROSS-CLI.md`** — new **"Building a responder agent"** subsection under `bin/buses-react`, with the copy-paste recipe (`BUSES_CONFIG_DIR` + `--interval 10` + `--max-fires-per-hour 12` + heredoc directive that refuses destructive ops, defers to human on approvals, stays silent when no response is needed). Each flag choice is explained. Includes the "don't run a parallel `buses read` for the same config dir — cursor steal" warning, and the "model selection / skills / persona belong in YOUR project's wrapper, not in this repo" boundary call.
+- **`CHANGELOG.md` v0.8.0 Notes** — softened the line that said "`--on-message` ships the buildable subset … including a `bin/buses-react`-style local relay if they want the autonomous-Claude-reaction shape." That phrasing could read as "you can use `--on-message` to do what `buses-react` does," which is wrong (different exposure surfaces — `--on-message` only gets a 120-char preview). New wording explicitly redirects responder agents to `bin/buses-react` with a link to the new recipe.
+
+### Notes
+
+- Origin: feedback from a Hermes (jose / atlas PM session) review on 2026-05-24, immediately after v0.8.0 shipped. Hermes correctly observed that the v0.8.0 framing of `--on-message` could lead someone to reach for it when they actually want `bin/buses-react`. The fix is doc disambiguation + a worked-example recipe; no behavioural change to the dispatch or polling code.
+- Rejected from this patch: shipping a `bin/buses-hermes-react` wrapper binary as Hermes proposed. Role-specific wrappers (Hermes / Codex / Hive / etc.) belong in the *consuming* project, not in this repo — otherwise every new responder agent flavour wants its own blessed wrapper here, which is a maintenance trap. The recipe + the existing `bin/buses-react` + `--prompt` override are all the plumbing a responder needs.
+
+[0.8.1]: ../../releases/tag/v0.8.1
+
 ## [0.8.0] — 2026-05-24
 
 Event-driven dispatch on the watcher daemon. After 4-Sonnet parallel code-review and Opus adversarial security-review gating.
@@ -45,7 +62,7 @@ Smaller hardening from the same review pass:
 
 ### Notes
 
-- The Claude-Code-to-Claude-Code zero-config wake-up variant (queued in v0.7.4 Notes) is **not buildable** with current Claude Code primitives — see Known limitations above. The `--on-message` design ships the buildable subset: an external-dispatch hook the user can wire to any notification channel, including a `bin/buses-react`-style local relay if they want the autonomous-Claude-reaction shape.
+- The Claude-Code-to-Claude-Code zero-config wake-up variant (queued in v0.7.4 Notes) is **not buildable** with current Claude Code primitives — see Known limitations above. The `--on-message` design ships the part that IS buildable: an external-dispatch hook for notifications, webhooks, bells, log scribbling. **For an autonomous AI responder agent that needs full message context, use `bin/buses-react`** (v0.7.2+) — not `--on-message`. The two cover different use cases; `--on-message` only gets a 120-char preview, so it's the wrong tool for an AI that needs to reason about the body. See [docs/CROSS-CLI.md § Building a responder agent](../docs/CROSS-CLI.md#building-a-responder-agent).
 
 [0.8.0]: ../../releases/tag/v0.8.0
 

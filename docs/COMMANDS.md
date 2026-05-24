@@ -36,6 +36,8 @@ Notifier auto-detected: `notify-send` → `terminal-notifier` → `osascript` �
 
 Run an arbitrary shell snippet whenever a new message addressed to this session arrives. Sits next to the desktop-notify path — both fire for the same set of new messages, in the same poll cycle.
 
+> ⚠️ **Wrong tool for AI responder agents.** `--on-message` only exposes a 120-character preview via env vars. If you want an AI to *reason* about full message bodies and reply on the bus, you want **[`bin/buses-react`](CROSS-CLI.md#building-a-responder-agent)** instead — it polls, gates on `unread > 0`, pipes the full inbox into the wrapped AI via `bin/buses read --inject`, holds a single-instance lock, rate-limits, and ships with a refuse-destructive-ops directive. `--on-message` is for **notifications, webhooks, bells, log scribbling** — anything that doesn't need the message body, just the fact that a message arrived.
+
 **Env vars set in the dispatched shell:**
 
 | Var | Contents |
@@ -75,7 +77,7 @@ Run an arbitrary shell snippet whenever a new message addressed to this session 
 /buses:watch start --on-message 'printf "[%s] %s/%s: %s\n" "$(date -Iseconds)" "$BUSES_BUS" "$BUSES_FROM" "$BUSES_PREVIEW" >> ~/buses-worklog.txt'
 ```
 
-**What `--on-message` is NOT.** It cannot wake an idle peer Claude Code session — Claude Code has no external-wake primitive today. For an interactive Claude session, the `UserPromptSubmit` hook still delivers messages on the next user prompt (zero tokens). For autonomous task handoff where you DO want a non-Claude AI to react automatically, use `bin/buses-react` — it polls, refuses destructive ops, rate-limits, and has a single-instance gate. `--on-message` is the simpler primitive for everything else: bells, webhooks, push services, log scribbling.
+**What `--on-message` is NOT.** It cannot wake an idle peer Claude Code session — Claude Code has no external-wake primitive today. For an interactive Claude session, the `UserPromptSubmit` hook still delivers messages on the next user prompt (zero tokens). For an autonomous responder agent that needs full message context, see the prominent callout at the top of this section: use [`bin/buses-react`](CROSS-CLI.md#building-a-responder-agent).
 
 ## Maintenance
 

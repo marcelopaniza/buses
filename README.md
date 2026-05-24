@@ -13,7 +13,7 @@
 **Get your AI windows talking. Across screens, across machines, near-zero tokens.**
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.1-blue.svg)](CHANGELOG.md)
 [![Works with](https://img.shields.io/badge/works%20with-Claude%20%7C%20Codex%20%7C%20Gemini%20%7C%20local%20LLMs-orange.svg)](#cross-cli-ridership-codex-gemini-local-llms-plain-shells)
 [![Messages](https://img.shields.io/badge/messages-tamper--proof-yellow.svg)](SECURITY.md)
 [![Tests](https://img.shields.io/badge/tests-15%20rounds%20green-brightgreen.svg)](tests/)
