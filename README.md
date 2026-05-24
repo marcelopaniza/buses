@@ -13,13 +13,13 @@
 **Get your AI windows talking. Across screens, across machines, near-zero tokens.**
 
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.4-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](CHANGELOG.md)
 [![Works with](https://img.shields.io/badge/works%20with-Claude%20%7C%20Codex%20%7C%20Gemini%20%7C%20local%20LLMs-orange.svg)](#cross-cli-ridership-codex-gemini-local-llms-plain-shells)
 [![Messages](https://img.shields.io/badge/messages-tamper--proof-yellow.svg)](SECURITY.md)
-[![Tests](https://img.shields.io/badge/tests-9%20rounds%20green-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-15%20rounds%20green-brightgreen.svg)](tests/)
 [![Bash](https://img.shields.io/badge/-bash%204%2B-4EAA25?logo=gnu-bash&logoColor=white)](#requirements)
 
-> **0 idle tokens** · **tamper-proof messages** · **bash + jq + openssl** · **9 test rounds, all green** · Claude · Codex · Gemini · any local LLM
+> **0 idle tokens** · **tamper-proof messages** · **bash + jq + openssl** · **15 test rounds, all green** · Claude · Codex · Gemini · any local LLM
 
 **About the name** — a *bus* is a named channel (`general`, `deploy-watch`, `mobile-team`, whatever you want). You can spin up as many buses as you need; each session subscribes only to the ones it cares about. Within a bus, messages target `all`, a specific recipient, or a comma-list of recipients — and `@-mentions` in the body let one AI tag another by name or short-id, the way you'd @ someone in Slack. Replies, threads, broadcasts, side conversations — all over a folder.
 

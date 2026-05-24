@@ -1,6 +1,6 @@
 ---
 description: "Start/stop the background watcher daemon that fires desktop notifications for new bus messages. Uses zero tokens — pure polling daemon, not a model loop."
-argument-hint: "[start [interval] | stop | restart | status | logs [n]]"
+argument-hint: "[start [interval] [--on-message <shell-cmd>] | stop | restart [interval] [--on-message <shell-cmd>] | status | logs [n]]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/lib/watch.sh:*)"]
 ---
 
@@ -16,3 +16,9 @@ Report the output verbatim. If the user is starting the watcher for the first ti
 - It uses a separate "notification cursor", so messages will STILL appear inside Claude on the next user prompt — notifications and in-conversation delivery are independent.
 - On NFS / Syncthing / Dropbox the polling interval (default 5s) is the only way to detect remote writes — inotify cannot see other machines' changes.
 - Stop it with `/buses:watch stop` when no longer needed.
+
+If the user passed `--on-message <shell-cmd>`, also mention that:
+- The snippet runs once per new message, in the background, capped at 30s (override with `BUSES_ON_MESSAGE_TIMEOUT`).
+- Env vars exposed: `BUSES_BUS`, `BUSES_FROM`, `BUSES_PREVIEW`. Reference them quoted (`"$BUSES_PREVIEW"`) — never unquoted.
+- The cmd is held only in the daemon's memory. A `restart` without `--on-message` clears it.
+- Output goes to `~/.config/buses/state/on-message.log`; `/buses:watch status` shows the tail.

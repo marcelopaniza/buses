@@ -185,12 +185,24 @@ fm_field()     { buses::fm_field "$1" "$2"; }
 
 if [ "$mode" = "--notify" ]; then
   # One TAB-separated record per message: bus<TAB>from_name<TAB>preview.
+  #
+  # Strip C0 + DEL from from_name and preview before emitting. Two reasons:
+  #   (1) Tabs/newlines in either field would shred the TAB-separated frame
+  #       (downstream `IFS=$'\t' read -r bus from preview` would misparse).
+  #   (2) ANSI escapes (\033...) in a body or in a peer-spoofed from_name
+  #       can poison the watcher's logs (--on-message.log, watcher.log) and
+  #       hijack the terminal of anyone who `cat`s those logs. The --hook /
+  #       --inject paths already strip these via escape_for_hook below;
+  #       --notify needs symmetric treatment. The corresponding daemon-side
+  #       defence is in lib/watcher_daemon.sh's dispatch_on_message.
   for i in "${!match_buses[@]}"; do
     bus="${match_buses[$i]}"
     content="${match_contents[$i]}"
     fm=$(buses::extract_fm "$content"); body=$(buses::extract_body "$content")
     fn=$(buses::fm_field "$fm" from_name); [ -n "$fn" ] || fn=$(buses::fm_field "$fm" from)
-    preview=$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-120)
+    fn=$(printf '%s' "$fn" | LC_ALL=C tr -d '\000-\037\177')
+    preview=$(printf '%s' "$body" | tr '\n' ' ' \
+              | LC_ALL=C tr -d '\000-\011\013-\037\177' | cut -c1-120)
     printf '%s\t%s\t%s\n' "$bus" "$fn" "$preview"
   done
   exit 0

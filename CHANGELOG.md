@@ -2,6 +2,53 @@
 
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-05-24
+
+Event-driven dispatch on the watcher daemon. After 4-Sonnet parallel code-review and Opus adversarial security-review gating.
+
+### Added
+
+- **`/buses:watch start [interval] --on-message <shell-cmd>`** — every new message addressed to this session fires `<shell-cmd>` once in a detached background subshell. Sits alongside the existing desktop-notify path; both fire for the same set of new messages in the same poll cycle. **Zero idle tokens** when no traffic — same polling loop, just one extra branch when a message lands.
+- **Env-var contract** for the dispatched shell: `BUSES_BUS`, `BUSES_FROM`, `BUSES_PREVIEW` (first 120 chars of body, newlines→spaces). The cmd snippet itself is never templated with body bytes — a malicious body cannot escape into shell. Reference env vars quoted (`"$BUSES_PREVIEW"`).
+- **`BUSES_ON_MESSAGE_TIMEOUT`** env override (default 30 s) caps each dispatch, when `timeout(1)` is on PATH. Non-zero exits and timeouts are logged but never crash the daemon nor roll back the notify cursor.
+- **`state/on-message.log`** captures dispatched-cmd stdout + stderr + exit-code footers. Rotated at 1 MB, same policy as `watcher.log`.
+- **`/buses:watch status`** now reports `on-message: ACTIVE (timeout=Ns)` or `on-message: off`, plus the tail of `on-message.log`. Inferred from the daemon's start-line in `watcher.log` (cross-platform — avoids `/proc/$pid/environ`).
+- `tests/round-15.sh` — regression: dispatch fires once with correct env, multi-word cmd survives the slash-command arg pipeline, non-zero exit doesn't crash the daemon, `restart` without `--on-message` clears the dispatcher, status surface reports active/off correctly, `--on-message` is rejected outside `start`/`restart`.
+- `docs/COMMANDS.md` — `--on-message` reference with five copy-paste recipes (terminal bell, ntfy.sh, Slack webhook, local mail, worklog) plus an honest "what `--on-message` is NOT" section.
+
+### Changed
+
+- **`lib/watch.sh` arg parser** now special-cases `--on-message <cmd>` so an arbitrary multi-word snippet survives the slash-command's whitespace-joined arg pipeline. The parser cuts at the **first** occurrence of the literal substring ` --on-message ` (space-flag-space); everything before goes through the existing word-splitter, everything after becomes a single positional. Snippets cannot contain that exact substring (workaround: wrap in a script).
+- **No persistence.** The cmd is held only in the daemon's process memory (env var on the `nohup`'d watcher). A `restart` without `--on-message` clears it. Intentional: a same-UID peer with write access to `$BUSES_CONFIG_DIR` should not be able to plant a dispatcher.
+
+### Security
+
+After Opus adversarial security-review flagged two medium-severity exploits in the pre-review code, both fixed before ship:
+
+- **ANSI / C0 control-character injection into preview + from_name (log forgery + terminal hijack).** Pre-fix, `lib/check.sh`'s `--notify` mode emitted preview bytes verbatim while `--hook` / `--inject` stripped C0 + DEL via `escape_for_hook`. A message body containing `\033[2K\033[1A` (or a peer-spoofed `from_name` with the same) would land in `state/on-message.log` and the dispatched cmd's env, poisoning anyone who `cat`'d the log (cursor-up + erase-line overwrites prior entries) and any recipe like `echo "$BUSES_FROM"` that prints to a terminal. **Fix:** `lib/check.sh --notify` now strips `\000-\037\177` from `from_name` and `\000-\011\013-\037\177` from preview (preserves the newline→space rewrite); `lib/watcher_daemon.sh`'s `dispatch_on_message` strips the same range again as defence-in-depth. Regression test: round-15 banner 9 sends `PRE\x1b[2K\x1b[1A\x07\x09\x7fPOST`, verifies the hex of `BUSES_PREVIEW` contains no ESC/BEL/TAB/DEL bytes while `PRE`/`POST` survive.
+- **Unbounded child fan-out on message burst (DoS).** Pre-fix, a sender flooding 500 messages in one poll cycle (or a same-UID peer crafting 500 raw message files) caused the daemon to background 500 concurrent `bash -c` subshells: fd/PID exhaustion, runaway outbound traffic if the recipe hits a webhook. The 30-s `timeout` capped per-child lifetime, not aggregate concurrency. **Fix:** new `BUSES_ON_MESSAGE_MAX_INFLIGHT` env (default 8) — before each dispatch the daemon counts `jobs -rp | wc -l`; excess fires are logged as `on-message SKIPPED (inflight=N >= cap=N)` and not queued. Daemon stays responsive; user can tune the cap or write a queueing cmd if they need every message. Regression test: round-15 banner 10 sends 5 messages back-to-back with cap=2 and a 3-s cmd, asserts at least one SKIPPED entry and daemon still alive.
+
+Smaller hardening from the same review pass:
+
+- **Body content reaches the cmd only via env vars.** The cmd snippet text is opaque to the daemon — no `sed`-style splice of body bytes into the snippet, so a message body like `'; rm -rf ~ #` cannot escape into shell. Same defense pattern as v0.7.3's heredoc fix. Verified by round-15 banner 8 (`argc=0 argv=[]` asserted).
+- **`on-message.log` symlink follow refused.** Same hardening pattern as v0.7.3's hook-stash fix. A same-UID peer pre-planting `state/<sid>/on-message.log` as a symlink to `~/.ssh/authorized_keys` would otherwise have us append attacker-influenced bytes there. Daemon now warns and disables dispatch for the remainder of the run if it detects the path as a symlink (checked at startup AND per-dispatch — handles post-startup plants). The log-rotation block also skips when `[ -L ]` is true. Regression test: round-15 banner 11.
+- **`--on-message ""` (empty cmd) rejected.** Pre-fix, the slash-command's whitespace-split could deliver an empty string through the `--on-message` path; `[ -n "$on_message_cmd" ]` then silently treated it as "no flag", masking user typos. Now `on_message_seen=1` with empty value is a hard error: `--on-message argument cannot be empty`.
+- **`--on-message` rejected outside `start`/`restart`** — `lib/watch.sh "status --on-message foo"` fails loudly with a clear error, eliminating "flag accepted but silently ignored" ambiguity.
+
+### Known limitations
+
+- **The literal substring ` --on-message ` cannot appear inside the snippet.** Arg-parser cuts on first occurrence. Workaround: write a wrapper script and pass its path.
+- **Same-UID peer visibility.** A peer running as the same UID can read the snippet from `/proc/$pid/environ` on Linux. Consistent with the existing threat model (`$BUSES_CONFIG_DIR` is already same-UID readable). Don't put secrets inside the snippet — reference env vars set elsewhere.
+- **`timeout(1)` not universally present.** When absent (some minimal BSD installs, macOS without coreutils), each dispatch runs uncapped. The daemon logs this at startup. Install GNU coreutils or write a wrapper script with its own timeout if this matters.
+- **Cannot wake an idle peer Claude Code session.** Claude Code has no external-wake primitive today (verified against `PushNotification` / `RemoteTrigger` / `ScheduleWakeup` schemas — all model-internal or cloud-side). For interactive Claude, the `UserPromptSubmit` hook still delivers on the next user prompt at zero cost. For autonomous task handoff, use `bin/buses-react`.
+- **`from_name` is not in the Ed25519 signature canonical.** Only `(id, bus, from, to, ts, body)` is signed; `from_name` is cosmetic metadata. A bus member with raw shared-folder write (in-threat-model) can drop a well-signed message whose `from_name` impersonates another member, and the watcher will dispatch `BUSES_FROM=<spoofed-name>`. Recipes that branch on identity (`if [ "$BUSES_FROM" = "boss" ]`) should resolve via the local member roster instead, or wait for v0.9.0 which is planned to either add `from_name` to the canonical payload or resolve UUIDs at dispatch time.
+
+### Notes
+
+- The Claude-Code-to-Claude-Code zero-config wake-up variant (queued in v0.7.4 Notes) is **not buildable** with current Claude Code primitives — see Known limitations above. The `--on-message` design ships the buildable subset: an external-dispatch hook the user can wire to any notification channel, including a `bin/buses-react`-style local relay if they want the autonomous-Claude-reaction shape.
+
+[0.8.0]: ../../releases/tag/v0.8.0
+
 ## [0.7.4] — 2026-05-24
 
 Small-feature release on top of the v0.7.3 security work. No code-review or security-review gating — the two changes are mechanical and non-security-bearing.
