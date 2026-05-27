@@ -3,7 +3,7 @@
 # Simulates two sessions (A and B) on a single machine using two distinct config dirs.
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test.XXXXXX)
 SHARED="$TMPDIR/share"
 CFG_A="$TMPDIR/cfg-a"

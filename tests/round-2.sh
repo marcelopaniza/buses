@@ -3,7 +3,7 @@
 # watcher daemon (with stub notifier). Self-contained — uses fresh tmpdir.
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test2.XXXXXX)
 SHARED="$TMPDIR/share"
 CFG_A="$TMPDIR/cfg-a"

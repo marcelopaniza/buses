@@ -4,7 +4,7 @@
 # wrapper-friendly delivery mode for non-Claude orchestrators).
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test9.XXXXXX)
 SHARED="$TMPDIR/share"
 CFG_A="$TMPDIR/cfg-a"

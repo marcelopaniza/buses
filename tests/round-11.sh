@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TEST_TMPDIR=$(mktemp -d /tmp/buses-test-r11.XXXXXX)
 SHARED="$TEST_TMPDIR/share"
 CFG_A="$TEST_TMPDIR/cfg-a"

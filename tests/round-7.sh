@@ -2,7 +2,7 @@
 # Round 7: Ed25519 signing — keys, sign/verify, forgery defence, tamper detection.
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test7.XXXXXX)
 SHARED="$TMPDIR/share"
 CFG_A="$TMPDIR/cfg-a"

@@ -2,7 +2,7 @@
 # Round 3: tests for per-terminal identity resolution via CLAUDE_CODE_SESSION_ID.
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test3.XXXXXX)
 SHARED="$TMPDIR/share"
 HOME_REAL="$HOME"

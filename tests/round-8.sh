@@ -9,7 +9,7 @@
 #   - watcher start mkdir-lock (concurrent starts serialise)
 set -euo pipefail
 
-PLUGIN=/mnt/data/buses
+PLUGIN="${PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TMPDIR=$(mktemp -d /tmp/buses-test8.XXXXXX)
 SHARED="$TMPDIR/share"
 
